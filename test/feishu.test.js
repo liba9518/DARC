@@ -117,6 +117,41 @@ test("result card only includes upcoming predictions", () => {
   assert.doesNotMatch(content, /LIVE_HOME/);
 });
 
+test("result card today-upcoming scope only includes today's unstarted official matches", () => {
+  const originalNow = Date.now;
+  Date.now = () => new Date("2026-06-21T09:00:00Z").getTime();
+  try {
+    const todayUpcoming = sampleSignal("a", "INFO", "Group A");
+    todayUpcoming.teamAZh = "TODAY_UPCOMING_HOME";
+    todayUpcoming.teamBZh = "TODAY_UPCOMING_AWAY";
+    todayUpcoming.kickoffAt = "2026-06-21T12:00:00Z";
+
+    const tomorrowUpcoming = sampleSignal("b", "INFO", "Group B");
+    tomorrowUpcoming.teamAZh = "TOMORROW_HOME";
+    tomorrowUpcoming.teamBZh = "TOMORROW_AWAY";
+    tomorrowUpcoming.kickoffAt = "2026-06-22T12:00:00Z";
+
+    const alreadyStarted = sampleSignal("c", "INFO", "Group C");
+    alreadyStarted.teamAZh = "STARTED_HOME";
+    alreadyStarted.teamBZh = "STARTED_AWAY";
+    alreadyStarted.kickoffAt = "2026-06-21T08:00:00Z";
+
+    const card = buildFeishuResultCard(
+      sampleSnapshot([todayUpcoming, tomorrowUpcoming, alreadyStarted]),
+      { scope: "today-upcoming" }
+    );
+    const content = card.card.elements
+      .map((element) => element.text?.content ?? "")
+      .join("\n");
+
+    assert.match(content, /TODAY_UPCOMING_HOME/);
+    assert.doesNotMatch(content, /TOMORROW_HOME/);
+    assert.doesNotMatch(content, /STARTED_HOME/);
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
 test("parlay card only shows combinations from two research signals", () => {
   const snapshot = sampleSnapshot([
     sampleSignal("a", "RESEARCH", "Group A"),

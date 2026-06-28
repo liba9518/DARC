@@ -245,10 +245,12 @@ function totalsContent(signal, totals) {
 function introElement(snapshot, selected, extraLines, scope = "today") {
   const matchCountLine = scope === "upcoming"
     ? `**未开赛比赛：** ${selected.length} 场`
+    : scope === "today-upcoming"
+      ? `**今日未开赛官方赛事：** ${selected.length} 场`
     : `**今日官方比赛：** ${snapshot.sourceStatus?.fifa?.todayMatchCount ?? selected.length} 场 · 卡片收录 ${selected.length} 场`;
   return markdownElement([
     `**国际足联赛程检查：** ${formatBeijingTime(snapshot.sourceStatus?.fifa?.checkedAt ?? snapshot.generatedAt)}`,
-    `**欧盘检查时间：** ${oddsCheckTime(snapshot)}`,
+    `**预测生成时间：** ${predictionGeneratedTime(snapshot)}`,
     matchCountLine,
     ...extraLines
   ].join("\n"));
@@ -426,12 +428,8 @@ function formatBeijingTime(value) {
   }).format(new Date(value));
 }
 
-function oddsCheckTime(snapshot) {
-  return formatBeijingTime(
-    snapshot.sourceStatus?.lyihub?.oddsCheckedAt
-    ?? snapshot.sourceStatus?.lyihub?.generatedAt
-    ?? snapshot.generatedAt
-  );
+function predictionGeneratedTime(snapshot) {
+  return formatBeijingTime(snapshot.generatedAt);
 }
 
 function formatPercent(value) {
@@ -547,6 +545,14 @@ function selectSignals(signals, referenceTime, scope, batchKey = null) {
   if (scope === "upcoming") {
     return signals
       .filter((signal) => signal.status === "upcoming")
+      .sort((left, right) => new Date(left.kickoffAt) - new Date(right.kickoffAt));
+  }
+  if (scope === "today-upcoming") {
+    const referenceKey = beijingDateKey(referenceTime ?? new Date());
+    return signals
+      .filter((signal) => signal.status === "upcoming")
+      .filter((signal) => beijingDateKey(signal.kickoffAt) === referenceKey)
+      .filter((signal) => new Date(signal.kickoffAt).getTime() >= Date.now())
       .sort((left, right) => new Date(left.kickoffAt) - new Date(right.kickoffAt));
   }
   if (scope === "batch") {

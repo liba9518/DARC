@@ -1,15 +1,13 @@
 # 世界杯策略推送工具
 
-这是一个面向世界杯赛前策略的 Node.js 工具链，用于采集 FIFA 官方赛程、多源模型预测、欧盘和 Polymarket 市场信息，并生成飞书策略卡。
+这是一个面向世界杯赛前策略的 Node.js 工具链，用于采集 FIFA 官方世界杯赛程，并在比赛未开赛前生成当天赛事预测和飞书策略卡。
 
 项目只做数据采集、策略展示和人工研究辅助，不会自动下单或执行真实交易。
 
 ## 核心能力
 
 - FIFA 官方赛程、比分、状态采集
-- Lyihub 多模型、欧盘、天气和球队动态采集
 - Hugging Face Poisson 预测本地复刻
-- Polymarket 相关市场匹配和价格参考
 - 胜负平、比分、大小球、胜负平二串四张飞书卡
 - 北京时间三批次自动推送
 - GitHub Actions 云端执行，支持本机关机后继续运行
@@ -29,7 +27,7 @@ npm run feishu:auto-push
 
 ```bash
 npm.cmd run fusion:snapshot -- data/fusion-signals.json 48 20
-npm.cmd run feishu:push-if-odds-changed
+npm.cmd run feishu:push-scheduled
 ```
 
 ## 云端自动推送
@@ -39,7 +37,7 @@ npm.cmd run feishu:push-if-odds-changed
 工作流文件：
 
 ```text
-.github/workflows/feishu-auto-push.yml
+.github/workflows/worldcup-feishu-auto-push.yml
 ```
 
 运行批次均按北京时间：
@@ -71,11 +69,10 @@ docs/github-actions-deploy.md
 
 ## 策略边界
 
-- FIFA 官方 `calendar/matches` 是赛程、开赛时间、比分和比赛状态主源。
-- 模型概率不混入欧盘或 Polymarket 价格。
-- 胜负平只有满足独立模型一致性、校准样本、概率优势和正期望门槛时才标记为 `RESEARCH`。
-- 比分和大小球没有对应赔率时，只展示模型方向，不给下注建议。
-- 二串只组合两个单场 `RESEARCH` 正期望信号。
+- FIFA 官方 `calendar/matches` 是赛程、开赛时间、比分和比赛状态唯一赛程主源。
+- 自动推送只按 FIFA 当天官方赛程筛选未开赛赛事。
+- 预测方向来自本地模型，不再依赖欧盘、Lyihub 或 Polymarket 采集。
+- 没有投注赔率时，只展示模型方向，不给下注建议。
 - 没有合格信号时明确不下注。
 
 更多策略和推送规则见：
@@ -88,4 +85,4 @@ docs/data-fusion-feishu.md
 
 运行时数据默认写入 `data/`，其中 JSON、JSONL 和临时文件被 `.gitignore` 忽略，避免把快照和推送状态误提交。
 
-GitHub Actions 会通过 cache 保存云端推送状态，用于同批次去重和失败补发。
+GitHub Actions 会通过 cache 保存云端推送状态，用于同一北京时间批次去重和失败补发。

@@ -9,22 +9,21 @@ const batchKey = process.argv[5] ?? inferBatchKey(new Date());
 const snapshot = JSON.parse(readFileSync(snapshotPath, "utf8"));
 const pushingDateKey = beijingDateKey(snapshot.generatedAt);
 const scheduleFingerprint = snapshot.sourceStatus?.fifa?.scheduleFingerprint ?? "";
-const batchWindow = buildBatchWindow(snapshot.generatedAt, batchKey);
-const upcomingFingerprint = buildUpcomingFingerprint(snapshot, batchWindow);
-const cardSchemaVersion = "daily-upcoming-v1";
+const todayUpcomingFingerprint = buildTodayUpcomingFingerprint(snapshot, pushingDateKey);
+const cardSchemaVersion = "fifa-today-upcoming-v1";
 const fingerprint = [
   pushingDateKey,
   batchKey,
   scheduleFingerprint,
-  upcomingFingerprint,
+  todayUpcomingFingerprint,
   cardSchemaVersion
 ].join("||");
 const cardNames = ["result", "score", "totals", "parlay"];
 
 validateSnapshot(snapshot);
 
-if (!scheduleFingerprint && !upcomingFingerprint) {
-  console.log("No official schedule or upcoming-match fingerprint found; skipping push.");
+if (!scheduleFingerprint && !todayUpcomingFingerprint) {
+  console.log("No official FIFA schedule or today-upcoming fingerprint found; skipping push.");
   process.exit(0);
 }
 
@@ -33,7 +32,7 @@ const previous = existsSync(statePath)
   : null;
 
 if (previous?.fingerprint === fingerprint) {
-  console.log("Today's upcoming World Cup strategy already pushed; skipping duplicate Feishu push.");
+  console.log("Today's FIFA World Cup strategy already pushed for this Beijing batch; skipping duplicate Feishu push.");
   process.exit(0);
 }
 
@@ -50,7 +49,7 @@ for (const cardName of cardNames) {
     resolve("src/feishu-push.js"),
     snapshotPath,
     cardName,
-    "batch",
+    "today-upcoming",
     batchKey
   ]);
   completedCards.add(cardName);
@@ -66,16 +65,15 @@ writeFileSync(statePath, `${JSON.stringify({
   fingerprint,
   dateKey: pushingDateKey,
   scheduleFingerprint,
-  upcomingFingerprint,
+  todayUpcomingFingerprint,
   cardSchemaVersion,
   batchKey,
-  batchWindow,
   pushedAt: new Date().toISOString(),
-  oddsCheckedAt: snapshot.sourceStatus?.lyihub?.oddsCheckedAt ?? null
+  scheduleCheckedAt: snapshot.sourceStatus?.fifa?.checkedAt ?? null
 }, null, 2)}\n`, "utf8");
 if (existsSync(progressPath)) unlinkSync(progressPath);
 
-console.log("Daily upcoming World Cup strategy pushed and state updated.");
+console.log("Daily FIFA World Cup strategy pushed and state updated.");
 
 function runNode(args) {
   return new Promise((resolveRun, rejectRun) => {
@@ -107,9 +105,6 @@ function validateSnapshot(value) {
   if (signalCount !== officialCount) {
     throw new Error(`Official schedule mismatch: FIFA=${officialCount}, snapshot=${signalCount}`);
   }
-  if (value.sourceStatus?.polymarket?.collectionErrors > 0) {
-    throw new Error("Polymarket collection is incomplete");
-  }
 }
 
 function beijingDateKey(value) {
@@ -121,15 +116,12 @@ function beijingDateKey(value) {
   }).format(new Date(value));
 }
 
-function buildUpcomingFingerprint(value, window) {
+function buildTodayUpcomingFingerprint(value, todayKey) {
   return (value.signals ?? [])
     .filter((signal) => {
       if (signal.status !== "upcoming") return false;
-      const kickoff = new Date(signal.kickoffAt).getTime();
-      return Number.isFinite(kickoff)
-        && kickoff >= window.start
-        && kickoff < window.end
-        && kickoff >= Date.now();
+      return beijingDateKey(signal.kickoffAt) === todayKey
+        && new Date(signal.kickoffAt).getTime() >= Date.now();
     })
     .map((signal) => [
       signal.matchId,
@@ -155,16 +147,3 @@ function inferBatchKey(now) {
   return "16";
 }
 
-function buildBatchWindow(referenceTime, batchKey) {
-  const dayKey = beijingDateKey(referenceTime);
-  const start = new Date(`${dayKey}T00:00:00+08:00`);
-  const offsetHours = batchKey === "00" ? 0 : batchKey === "08" ? 8 : 16;
-  const windowStart = new Date(start.getTime() + offsetHours * 60 * 60 * 1000);
-  const windowEnd = new Date(windowStart.getTime() + 8 * 60 * 60 * 1000);
-  return {
-    start: windowStart.getTime(),
-    end: windowEnd.getTime(),
-    startIso: windowStart.toISOString(),
-    endIso: windowEnd.toISOString()
-  };
-}

@@ -21,9 +21,10 @@
     "feishu:preview": "node src/feishu-preview.js",
     "feishu:push": "node src/feishu-push.js",
     "feishu:auto-push": "node src/feishu-auto-push.js",
+    "feishu:push-scheduled": "node src/feishu-push-on-odds-change.js",
     "feishu:push-if-odds-changed": "node src/feishu-push-on-odds-change.js",
     "pipeline:preview": "npm run fusion:snapshot && npm run fusion:report && npm run feishu:preview",
-    "pipeline:push": "npm run fusion:snapshot && npm run feishu:push-if-odds-changed"
+    "pipeline:push": "npm run fusion:snapshot && npm run feishu:push-scheduled"
   },
   "engines": {
     "node": ">=18"
