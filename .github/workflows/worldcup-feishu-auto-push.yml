@@ -50,6 +50,22 @@ jobs:
           restore-keys: |
             worldcup-feishu-push-state-
 
+      - name: Validate Feishu secrets
+        env:
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+          FEISHU_BOT_SECRET: ${{ secrets.FEISHU_BOT_SECRET }}
+        run: |
+          missing=0
+          if [ -z "$FEISHU_WEBHOOK_URL" ]; then
+            echo "::error::Missing repository secret FEISHU_WEBHOOK_URL"
+            missing=1
+          fi
+          if [ -z "$FEISHU_BOT_SECRET" ]; then
+            echo "::error::Missing repository secret FEISHU_BOT_SECRET"
+            missing=1
+          fi
+          exit "$missing"
+
       - name: Run auto push
         env:
           FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
@@ -64,7 +80,7 @@ jobs:
           done
 
       - name: Notify failure
-        if: failure()
+        if: failure() && secrets.FEISHU_WEBHOOK_URL != ''
         env:
           FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
           FEISHU_BOT_SECRET: ${{ secrets.FEISHU_BOT_SECRET }}
