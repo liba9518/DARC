@@ -80,9 +80,14 @@ jobs:
           done
 
       - name: Notify failure
-        if: failure() && secrets.FEISHU_WEBHOOK_URL != ''
+        if: failure()
         env:
           FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
           FEISHU_BOT_SECRET: ${{ secrets.FEISHU_BOT_SECRET }}
           GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: node src/feishu-notify.js "World Cup auto push failed" "The scheduled Feishu strategy push did not complete after retries."
+        run: |
+          if [ -z "$FEISHU_WEBHOOK_URL" ]; then
+            echo "Skipping Feishu failure notification because FEISHU_WEBHOOK_URL is missing."
+            exit 0
+          fi
+          node src/feishu-notify.js "World Cup auto push failed" "The scheduled Feishu strategy push did not complete after retries."
