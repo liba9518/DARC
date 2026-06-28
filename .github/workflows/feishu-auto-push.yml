@@ -1,0 +1,67 @@
+name: Feishu Auto Push
+
+on:
+  schedule:
+    - cron: "0 16 * * *"
+    - cron: "0 0 * * *"
+    - cron: "0 8 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: feishu-auto-push
+  cancel-in-progress: false
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TZ: Asia/Shanghai
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Check scripts
+        run: npm run check
+
+      - name: Restore push state
+        uses: actions/cache@v4
+        with:
+          path: |
+            data/last-pushed-odds.json
+            data/feishu-push-progress.json
+          key: feishu-push-state-${{ github.run_id }}
+          restore-keys: |
+            feishu-push-state-
+
+      - name: Run auto push
+        env:
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+          FEISHU_BOT_SECRET: ${{ secrets.FEISHU_BOT_SECRET }}
+        run: |
+          for attempt in 1 2 3; do
+            npm run feishu:auto-push && exit 0
+            if [ "$attempt" = "3" ]; then
+              exit 1
+            fi
+            sleep $((attempt * 60))
+          done
+
+      - name: Notify failure
+        if: failure()
+        env:
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+          FEISHU_BOT_SECRET: ${{ secrets.FEISHU_BOT_SECRET }}
+          GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node src/feishu-notify.js "World Cup auto push failed" "The scheduled Feishu strategy push did not complete after retries."

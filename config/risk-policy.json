@@ -1,0 +1,14 @@
+{
+  "minEdge": 0.03,
+  "minRoi": 0.08,
+  "maxSpread": 0.05,
+  "minVolume": 0,
+  "kellyFraction": 0.25,
+  "maxStakeFraction": 0.01,
+  "maxPlanStakeFraction": 0.04,
+  "maxOrdersPerPlan": 4,
+  "slippageCap": 0.01,
+  "tickSize": 0.01,
+  "dryRun": true,
+  "requireManualConfirmation": true
+}

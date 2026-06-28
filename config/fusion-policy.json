@@ -1,0 +1,16 @@
+{
+  "modelWeights": {
+    "lyihub": 0.7,
+    "huggingface": 0.3
+  },
+  "minProbabilityEdge": 0.03,
+  "minExpectedValue": 0.08,
+  "watchExpectedValue": 0.03,
+  "maxDisagreement": 0.12,
+  "maxSpread": 0.05,
+  "minModelSources": 2,
+  "minAgreement": 2,
+  "minCalibrationMatches": 30,
+  "kellyFraction": 0.25,
+  "maxStakeFraction": 0.01
+}

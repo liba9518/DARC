@@ -1,0 +1,31 @@
+{
+  "name": "world-cup-polymarket-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Polymarket public market data API integration.",
+  "scripts": {
+    "check": "node --check src/polymarket.js && node --check src/demo.js && node --check src/relayer-demo.js && node --check src/world-cup-markets.js && node --check src/world-cup-snapshot.js && node --check src/world-cup-report.js && node --check src/edge-engine.js && node --check src/world-cup-edge.js && node --check src/trade-plan.js && node --check src/score-predictions.js && node --check src/model-report.js && node --check src/account-summary.js && node --check src/team-data.js && node --check src/sources/fifa.js && node --check src/sources/lyihub.js && node --check src/sources/hf-model.js && node --check src/sources/hf-space.js && node --check src/sources/polymarket-match.js && node --check src/fusion-engine.js && node --check src/fusion-snapshot.js && node --check src/fusion-report.js && node --check src/score-engine.js && node --check src/env.js && node --check src/feishu.js && node --check src/feishu-preview.js && node --check src/feishu-push.js && node --check src/feishu-push-on-odds-change.js && node --check src/feishu-auto-push.js && node --check src/feishu-notify.js",
+    "test": "node --test",
+    "demo": "node src/demo.js",
+    "relayer:demo": "node src/relayer-demo.js",
+    "worldcup:snapshot": "node src/world-cup-snapshot.js",
+    "worldcup:report": "node src/world-cup-report.js",
+    "worldcup:edge": "node src/world-cup-edge.js",
+    "worldcup:plan": "node src/trade-plan.js",
+    "worldcup:score": "node src/score-predictions.js",
+    "model:report": "node src/model-report.js",
+    "account:summary": "node src/account-summary.js",
+    "fusion:snapshot": "node src/fusion-snapshot.js",
+    "fusion:report": "node src/fusion-report.js",
+    "feishu:preview": "node src/feishu-preview.js",
+    "feishu:push": "node src/feishu-push.js",
+    "feishu:auto-push": "node src/feishu-auto-push.js",
+    "feishu:push-if-odds-changed": "node src/feishu-push-on-odds-change.js",
+    "pipeline:preview": "npm run fusion:snapshot && npm run fusion:report && npm run feishu:preview",
+    "pipeline:push": "npm run fusion:snapshot && npm run feishu:push-if-odds-changed"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
