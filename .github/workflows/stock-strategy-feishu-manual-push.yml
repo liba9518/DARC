@@ -1,13 +1,6 @@
-name: Stock Strategy Feishu Auto Push
+name: Stock Strategy Feishu Manual Push
 
 on:
-  schedule:
-    - cron: "10 1 * * 1-5"      # 09:10 Asia/Shanghai, A-share pre-open card
-    - cron: "20 7 * * 1-5"      # 15:20 Asia/Shanghai, A-share post-close review
-    - cron: "10 13 * * 1-5"     # 21:10 Asia/Shanghai, US pre-open card
-    - cron: "30 22 * * 1-5"     # 06:30 Asia/Shanghai next day, US post-close review
-    - cron: "*/15 1-3,5-7 * * 1-5"   # A-share intraday monitor window
-    - cron: "*/15 13-22 * * 1-5"     # US intraday monitor window, covers DST and winter time
   workflow_dispatch:
     inputs:
       task:
@@ -36,7 +29,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: stock-strategy-feishu-auto-push
+  group: stock-strategy-feishu-manual-push
   cancel-in-progress: false
 
 env:
@@ -52,6 +45,7 @@ jobs:
       FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
       FEISHU_WEBHOOK_SECRET: ${{ secrets.FEISHU_WEBHOOK_SECRET || secrets.FEISHU_BOT_SECRET }}
       FEISHU_WEBHOOK_KEYWORD: ${{ vars.FEISHU_WEBHOOK_KEYWORD || secrets.FEISHU_WEBHOOK_KEYWORD }}
+      FEISHU_STATUS_ON_SKIP: ${{ vars.FEISHU_STATUS_ON_SKIP || 'true' }}
       QUIVER_API_TOKEN: ${{ secrets.QUIVER_API_TOKEN }}
       US_STRATEGY_POOL: ${{ vars.US_STRATEGY_POOL || 'NVDA,MSFT,GOOGL,AMZN,META,AVGO,AMD,ANET,VRT,MU,TSM,PLTR' }}
       A_STRATEGY_POOL: ${{ vars.A_STRATEGY_POOL || '600519,300750,002594,601138,000063,002475,300308,688041,600276,601318,600036,000333' }}
@@ -89,32 +83,12 @@ jobs:
             data/intraday_alert_state.json
           key: stock-strategy-feishu-state-${{ github.run_id }}
           restore-keys: |
+            stock-strategy-daily-state-
+            stock-strategy-intraday-state-
             stock-strategy-feishu-state-
 
       - name: Prepare runtime directories
         run: mkdir -p data logs reports
-
-      - name: Resolve task
-        id: task
-        shell: bash
-        run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            task="${{ inputs.task }}"
-            force="${{ inputs.force }}"
-          else
-            force="false"
-            case "${{ github.event.schedule }}" in
-              "10 1 * * 1-5") task="cn-preopen" ;;
-              "20 7 * * 1-5") task="cn-review" ;;
-              "10 13 * * 1-5") task="us-preopen" ;;
-              "30 22 * * 1-5") task="us-review" ;;
-              "*/15 1-3,5-7 * * 1-5") task="cn-intraday" ;;
-              "*/15 13-22 * * 1-5") task="us-intraday" ;;
-              *) echo "Unknown schedule: ${{ github.event.schedule }}" >&2; exit 1 ;;
-            esac
-          fi
-          echo "task=${task}" >> "$GITHUB_OUTPUT"
-          echo "force=${force}" >> "$GITHUB_OUTPUT"
 
       - name: Validate Feishu secret
         shell: bash
@@ -130,7 +104,7 @@ jobs:
           set -euo pipefail
 
           force_args=()
-          if [[ "${{ steps.task.outputs.force }}" == "true" ]]; then
+          if [[ "${{ inputs.force }}" == "true" ]]; then
             force_args=(--force)
           fi
 
@@ -146,7 +120,7 @@ jobs:
             esac
           }
 
-          case "${{ steps.task.outputs.task }}" in
+          case "${{ inputs.task }}" in
             all-preopen)
               run_task cn-preopen
               run_task us-preopen
@@ -168,7 +142,7 @@ jobs:
               run_task us-intraday
               ;;
             *)
-              run_task "${{ steps.task.outputs.task }}"
+              run_task "${{ inputs.task }}"
               ;;
           esac
 
