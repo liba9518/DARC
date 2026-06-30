@@ -1,22 +1,21 @@
-name: Stock Strategy Key Cards
+name: Stock Strategy Feishu Auto Push Backup
 
 on:
   schedule:
-    - cron: "10 1 * * 1-5"   # 09:10 Asia/Shanghai, A-share pre-open
-    - cron: "20 1 * * 1-5"   # 09:20 Asia/Shanghai, A-share pre-open backup
-    - cron: "35 1 * * 1-5"   # 09:35 Asia/Shanghai, A-share pre-open backup
-    - cron: "20 7 * * 1-5"   # 15:20 Asia/Shanghai, A-share post-close
-    - cron: "35 7 * * 1-5"   # 15:35 Asia/Shanghai, A-share post-close backup
-    - cron: "10 13 * * 1-5"  # 21:10 Asia/Shanghai, US pre-open
-    - cron: "25 13 * * 1-5"  # 21:25 Asia/Shanghai, US pre-open backup
-    - cron: "30 22 * * 1-5"  # 06:30 Asia/Shanghai next day, US post-close
-    - cron: "45 22 * * 1-5"  # 06:45 Asia/Shanghai next day, US post-close backup
+    - cron: "15 1 * * 1-5"   # 09:15 Asia/Shanghai, A-share pre-open backup
+    - cron: "40 1 * * 1-5"   # 09:40 Asia/Shanghai, A-share pre-open backup
+    - cron: "25 7 * * 1-5"   # 15:25 Asia/Shanghai, A-share post-close backup
+    - cron: "40 7 * * 1-5"   # 15:40 Asia/Shanghai, A-share post-close backup
+    - cron: "15 13 * * 1-5"  # 21:15 Asia/Shanghai, US pre-open backup
+    - cron: "28 13 * * 1-5"  # 21:28 Asia/Shanghai, US pre-open final backup
+    - cron: "35 22 * * 1-5"  # 06:35 Asia/Shanghai next day, US post-close backup
+    - cron: "50 22 * * 1-5"  # 06:50 Asia/Shanghai next day, US post-close backup
   workflow_dispatch:
     inputs:
       task:
-        description: "Key card task to run"
+        description: "Backup task to run"
         required: true
-        default: "cn-preopen"
+        default: "us-preopen"
         type: choice
         options:
           - cn-preopen
@@ -33,7 +32,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: stock-strategy-key-cards
+  group: stock-strategy-feishu-auto-push-backup
   cancel-in-progress: false
 
 env:
@@ -79,7 +78,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: data/daily_card_state.json
-          key: stock-strategy-daily-state-${{ github.run_id }}
+          key: stock-strategy-daily-state-backup-${{ github.run_id }}
           restore-keys: |
             stock-strategy-daily-state-
             stock-strategy-feishu-state-
@@ -97,10 +96,10 @@ jobs:
           else
             force="false"
             case "${{ github.event.schedule }}" in
-              "10 1 * * 1-5"|"20 1 * * 1-5"|"35 1 * * 1-5") task="cn-preopen" ;;
-              "20 7 * * 1-5"|"35 7 * * 1-5") task="cn-review" ;;
-              "10 13 * * 1-5"|"25 13 * * 1-5") task="us-preopen" ;;
-              "30 22 * * 1-5"|"45 22 * * 1-5") task="us-review" ;;
+              "15 1 * * 1-5"|"40 1 * * 1-5") task="cn-preopen" ;;
+              "25 7 * * 1-5"|"40 7 * * 1-5") task="cn-review" ;;
+              "15 13 * * 1-5"|"28 13 * * 1-5") task="us-preopen" ;;
+              "35 22 * * 1-5"|"50 22 * * 1-5") task="us-review" ;;
               *) echo "Unknown schedule: ${{ github.event.schedule }}" >&2; exit 1 ;;
             esac
           fi
@@ -115,7 +114,7 @@ jobs:
             exit 1
           fi
 
-      - name: Push key strategy card
+      - name: Push backup strategy card
         shell: bash
         run: |
           set -euo pipefail
