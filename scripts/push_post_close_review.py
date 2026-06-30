@@ -24,10 +24,13 @@ from integrations.daily_stock_selector import StockPick, select_daily_picks
 from scripts.push_daily_strategy_cards import (
     DEFAULT_A_POOL,
     DEFAULT_US_POOL,
+    build_status_card,
     generate_market_selection,
     load_state,
     save_state,
     send_card,
+    send_status_card_once,
+    status_on_skip_enabled,
 )
 from scripts.push_strategy_digest import configure_console_encoding, parse_tickers
 
@@ -238,6 +241,25 @@ def run_once(*, market: str, dry_run: bool = False, force: bool = False) -> None
     next_picks, selection_errors = generate_market_selection(market)
     if not next_picks:
         print(f"{state_key.upper()} 未生成次日有效名单，跳过本次复盘推送")
+        if not dry_run and status_on_skip_enabled():
+            sent_status = send_status_card_once(
+                state,
+                state_key=state_key,
+                task_key="review_empty",
+                reason="no_next_picks",
+                card=build_status_card(
+                    title="🇨🇳 A股收盘复盘｜运行状态"
+                    if market == "cn"
+                    else "🇺🇸 美股收盘复盘｜运行状态",
+                    market_label="沪深A股" if market == "cn" else "美国股票",
+                    conclusion="云端收盘复盘任务已经正常执行，本次没有生成次日有效名单。",
+                    action="不推送空复盘卡，继续保留上一版跟踪名单，等待下一次有效信号。",
+                    details=[*quote_errors, *selection_errors] or ["数据源或筛选条件未达到策略门槛"],
+                    template="turquoise",
+                ),
+            )
+            if sent_status:
+                print(f"{state_key.upper()} 收盘复盘状态卡已推送")
         return
     errors = [*quote_errors, *selection_errors]
     card = build_review_card(market, results, next_picks, previous_codes, errors=errors)

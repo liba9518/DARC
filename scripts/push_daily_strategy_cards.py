@@ -147,6 +147,82 @@ def send_card(card: dict[str, Any]) -> None:
         raise RuntimeError(f"飞书卡片推送失败: {result}")
 
 
+def _env_flag(name: str, default: str = "false") -> bool:
+    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def status_on_skip_enabled() -> bool:
+    return _env_flag("FEISHU_STATUS_ON_SKIP")
+
+
+def build_status_card(
+    *,
+    title: str,
+    market_label: str,
+    conclusion: str,
+    action: str,
+    details: list[str] | None = None,
+    template: str = "grey",
+) -> dict[str, Any]:
+    lines = [
+        f"**明确结论：** {conclusion}",
+        f"**处理意见：** {action}",
+        f"**市场：** {market_label}　**检查时间：** {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+    ]
+    if details:
+        lines.append("**补充说明：** " + "；".join(details[:3]))
+    return {
+        "config": {"wide_screen_mode": True},
+        "header": {
+            "template": template,
+            "title": {"tag": "plain_text", "content": title},
+        },
+        "elements": [
+            {
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": "\n".join(lines),
+                },
+            },
+            {
+                "tag": "note",
+                "elements": [
+                    {
+                        "tag": "plain_text",
+                        "content": "这张状态卡只在关键任务没有生成有效名单时发送，用来确认云端自动化仍在运行。",
+                    }
+                ],
+            },
+        ],
+    }
+
+
+def send_status_card_once(
+    state: dict[str, Any],
+    *,
+    state_key: str,
+    task_key: str,
+    reason: str,
+    card: dict[str, Any],
+) -> bool:
+    today = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d")
+    signature = f"{today}|{state_key}|{task_key}|{reason}"
+    section = state.setdefault(state_key, {})
+    status_key = f"{task_key}_status_signature"
+    if section.get(status_key) == signature:
+        print(f"{state_key.upper()} {task_key} 状态卡今日已发送，跳过重复提醒")
+        return False
+    send_card(card)
+    section[status_key] = signature
+    section[f"{task_key}_status_at"] = datetime.now().isoformat(timespec="seconds")
+    section[f"{task_key}_status_reason"] = reason
+    state[state_key] = section
+    state["updated_at"] = datetime.now().isoformat(timespec="seconds")
+    save_state(state)
+    return True
+
+
 def load_state() -> dict[str, Any]:
     try:
         return json.loads(STATE_PATH.read_text(encoding="utf-8"))
@@ -323,6 +399,25 @@ def run_once(*, market: str = "both", dry_run: bool = False, force: bool = False
         picks = picks_by_market[selected_market]
         if not picks:
             print(f"{state_key.upper()} 未选出有效标的，跳过本次推送")
+            if status_on_skip_enabled():
+                sent_status = send_status_card_once(
+                    state,
+                    state_key=state_key,
+                    task_key="preopen_empty",
+                    reason="no_valid_picks",
+                    card=build_status_card(
+                        title="🇨🇳 A股盘前策略｜运行状态"
+                        if selected_market == "cn"
+                        else "🇺🇸 美股盘前策略｜运行状态",
+                        market_label="沪深A股" if selected_market == "cn" else "美国股票",
+                        conclusion="云端盘前任务已经正常执行，本次没有筛出新的有效名单。",
+                        action="保持上一版精选名单，不推送空卡，等待下一次有效信号。",
+                        details=["数据源或筛选条件未达到策略门槛"],
+                        template="green" if selected_market == "cn" else "blue",
+                    ),
+                )
+                if sent_status:
+                    sent.append(f"{state_key}-status")
             continue
         signature = selection_signature(picks)
         if not force and state.get(state_key, {}).get("signature") == signature:

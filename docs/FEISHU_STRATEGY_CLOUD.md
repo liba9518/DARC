@@ -4,20 +4,24 @@
 
 ## 1. 工作流入口
 
-工作流文件：
+工作流文件位于 `main` 分支：
 
 ```text
-.github/workflows/feishu-strategy-push.yml
+.github/workflows/stock-strategy-key-cards.yml
+.github/workflows/stock-strategy-intraday-monitor.yml
+.github/workflows/stock-strategy-feishu-manual-push.yml
 ```
 
 启用后会自动执行：
 
-- A股盘前策略：周一到周五 09:10，北京时间。
-- A股收盘复盘：周一到周五 15:20，北京时间。
-- 美股盘前策略：周一到周五 21:10，北京时间。
-- 美股收盘复盘：北京时间周二到周六 06:30，对应美股周一到周五收盘后。
-- A股盘中监控：交易时段窗口内每 15 分钟检查一次，只在达到异动门槛时推送。
-- 美股盘中监控：覆盖夏令时和冬令时交易窗口，每 15 分钟检查一次，只在达到异动门槛时推送。
+- A股盘前策略：周一到周五 09:10、09:20、09:35，北京时间补跑。
+- A股收盘复盘：周一到周五 15:20、15:35，北京时间补跑。
+- 美股盘前策略：周一到周五 21:10、21:25，北京时间补跑。
+- 美股收盘复盘：北京时间周二到周六 06:30、06:45，对应美股周一到周五收盘后补跑。
+- A股盘中监控：交易时段窗口内每 30 分钟检查一次，只在达到异动门槛时推送。
+- 美股盘中监控：覆盖夏令时和冬令时交易窗口，每 30 分钟检查一次，只在达到异动门槛时推送。
+
+关键卡片补跑不会重复发送同一份名单：脚本会根据市场、行情日期和股票名单生成签名，已推送过的内容会自动跳过。
 
 ## 2. 必填密钥
 
@@ -68,17 +72,20 @@ INTRADAY_MOVE_THRESHOLD
 INTRADAY_EXTREME_THRESHOLD
 INTRADAY_STEP_THRESHOLD
 INTRADAY_COOLDOWN_MINUTES
+FEISHU_STATUS_ON_SKIP
 FEISHU_WEBHOOK_KEYWORD
 ```
 
 不配置时，工作流会使用仓库内置默认值。
+
+`FEISHU_STATUS_ON_SKIP` 用于控制“运行状态卡”。云端关键卡片工作流默认开启：当盘前或复盘任务正常运行，但没有生成有效名单时，会发送一张简短状态卡，说明系统仍在运行；重复补跑不会重复发送同一张状态卡。
 
 ## 4. 手动测试
 
 在 GitHub 仓库页面进入：
 
 ```text
-Actions -> Feishu strategy push -> Run workflow
+Actions -> Stock Strategy Feishu Manual Push -> Run workflow
 ```
 
 推荐先选择：
@@ -98,11 +105,11 @@ data/daily_card_state.json
 data/intraday_alert_state.json
 ```
 
-这些状态用于减少重复推送和盘中重复提醒。GitHub Actions cache 不是数据库，但足够支撑当前轻量级策略推送。
+关键卡片和盘中监控使用分开的 cache 前缀，避免高频盘中任务覆盖盘前/复盘状态。GitHub Actions cache 不是数据库，但足够支撑当前轻量级策略推送。
 
 ## 6. 注意事项
 
-- GitHub scheduled workflow 不是实时定时器，可能有几分钟延迟。
+- GitHub scheduled workflow 不是实时定时器，可能有几分钟延迟，关键卡片已经配置补跑来提高到达率。
 - 如果仓库长期没有活动，GitHub 可能暂停定时工作流，需要在 Actions 页面重新启用。
 - 如果飞书机器人设置了 IP 白名单，GitHub Actions 的出口 IP 不固定，不建议使用固定 IP 白名单；如必须使用白名单，建议改用云服务器或云函数并绑定固定出口。
 - 本地 Windows 任务计划器和 GitHub Actions 不建议长期同时开启同一类任务，否则可能重复推送。
