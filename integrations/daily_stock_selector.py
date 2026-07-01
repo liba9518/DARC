@@ -28,6 +28,9 @@ class StockPick:
     relative_strength_20d: float
     max_drawdown_20d: float
     liquidity: float
+    capital_trace_score: float
+    capital_trace_label: str
+    accumulation_20d: float
     score: float
     confidence: str
     confidence_points: int
@@ -133,6 +136,14 @@ def rank_history(
     annualized_volatility = float(close.pct_change().tail(20).std() * np.sqrt(252) * 100)
     rolling_peak = close.tail(20).cummax()
     max_drawdown_20d = float(((close.tail(20) / rolling_peak) - 1).min() * 100)
+    turnover = close * volume
+    turnover_20d = turnover.tail(20)
+    signed_turnover_20d = np.sign(close.diff().tail(20)) * turnover_20d
+    accumulation_20d = (
+        float(signed_turnover_20d.sum() / turnover_20d.sum() * 100)
+        if float(turnover_20d.sum()) > 0
+        else 0.0
+    )
     positive_weeks = sum(
         float(close.iloc[-offset] / close.iloc[-offset - 5] - 1) > 0
         for offset in (1, 6, 11, 16)
@@ -146,6 +157,27 @@ def rank_history(
         if len(benchmark_close) >= 21:
             benchmark_return_20d = (float(benchmark_close.iloc[-1]) / float(benchmark_close.iloc[-21]) - 1) * 100
     relative_strength_20d = return_20d - benchmark_return_20d
+    capital_trace_score = 45.0
+    capital_trace_score += float(np.clip(accumulation_20d, -20, 22) * 0.7)
+    capital_trace_score += float(np.clip(relative_strength_20d / 20 * 15, -10, 15))
+    capital_trace_score += float(np.clip((volume_ratio - 0.8) / 1.2 * 12, -6, 12))
+    capital_trace_score += 8 if price >= ma20 >= ma60 else 3 if price >= ma20 else -8
+    capital_trace_score += 5 if 50 <= rsi14 <= 74 else -7 if rsi14 > 82 else 0
+    capital_trace_score += 5 if max_drawdown_20d >= -10 and return_20d > 0 else -5 if max_drawdown_20d < -16 else 0
+    if return_1d > 6 and volume_ratio > 1.8:
+        capital_trace_score -= 8
+    if return_20d > 38:
+        capital_trace_score -= 6
+    capital_trace_score = round(float(np.clip(capital_trace_score, 0, 100)), 1)
+    capital_trace_label = (
+        "强承接"
+        if capital_trace_score >= 70
+        else "承接确认"
+        if capital_trace_score >= 58
+        else "有资金痕迹"
+        if capital_trace_score >= 45
+        else "资金链路弱"
+    )
 
     score = 5.0
     score += 12 if price >= ma20 else -15
@@ -159,12 +191,15 @@ def rank_history(
     score += 5 if 48 <= rsi14 <= 70 else 2 if 40 <= rsi14 < 48 else -10 if rsi14 > 80 else -3
     score -= float(np.clip((annualized_volatility - 40) / 4, 0, 14))
     score -= float(np.clip((-max_drawdown_20d - 8) / 2, 0, 10))
+    score += float(np.clip((capital_trace_score - 50) / 50 * 8, -5, 8))
     if abs(return_1d) >= 8 or return_20d >= 35:
         score -= 8
     score += float(np.clip(regime_adjustment, -10, 5))
     score = round(float(np.clip(score, 0, 100)), 1)
 
-    confidence_points = sum(
+    confidence_points = min(
+        10,
+        sum(
         (
             price >= ma20,
             ma20 >= ma60,
@@ -176,7 +211,10 @@ def rank_history(
             annualized_volatility <= 55,
             max_drawdown_20d >= -12,
             liquidity >= minimum_liquidity,
+            capital_trace_score >= 55,
+            accumulation_20d > 0,
         )
+        ),
     )
     confidence = "A" if confidence_points >= 8 else "B" if confidence_points >= 6 else "C"
     eligible = (
@@ -187,6 +225,7 @@ def rank_history(
         and relative_strength_20d > -2
         and rsi14 < 82
         and liquidity >= minimum_liquidity
+        and capital_trace_score >= (58 if regime == "逆风" else 50)
         and confidence_points >= (8 if regime == "逆风" else 6)
     )
 
@@ -201,6 +240,10 @@ def rank_history(
         reasons.append(f"近20日跑赢基准 {relative_strength_20d:+.1f}%")
     if volume_ratio >= 1.15:
         reasons.append(f"量能放大至20日均量 {volume_ratio:.1f} 倍")
+    if capital_trace_score >= 58:
+        reasons.append(f"资金链路{capital_trace_label}，承接分 {capital_trace_score:.0f}")
+    elif accumulation_20d > 8:
+        reasons.append(f"近20日上涨成交占优 {accumulation_20d:+.1f}%")
     if 50 <= rsi14 <= 72:
         reasons.append(f"强弱指标 {rsi14:.0f}，走势有力且没有明显过热")
     if not reasons:
@@ -213,6 +256,10 @@ def rank_history(
         risks.append("近期波动较高")
     if volume_ratio < 0.75:
         risks.append("量能不足，突破确认度偏低")
+    if capital_trace_score < 45:
+        risks.append("资金承接证据不足")
+    if return_1d > 6 and volume_ratio > 1.8:
+        risks.append("短线放量过急，避免追高")
     if return_20d > 25:
         risks.append("近月涨幅较大，注意回撤")
     if regime == "逆风":
@@ -235,6 +282,9 @@ def rank_history(
         relative_strength_20d=round(relative_strength_20d, 2),
         max_drawdown_20d=round(max_drawdown_20d, 2),
         liquidity=round(liquidity, 2),
+        capital_trace_score=capital_trace_score,
+        capital_trace_label=capital_trace_label,
+        accumulation_20d=round(accumulation_20d, 2),
         score=score,
         confidence=confidence,
         confidence_points=confidence_points,

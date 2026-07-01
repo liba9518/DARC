@@ -59,7 +59,7 @@ def build_strategy_card(
                 "tag": "lark_md",
                 "content": (
                     f"**今日结论：** 以下三只已经通过趋势、强弱和成交活跃度筛选，优先关注。\n"
-                    f"**判断方法：** 市场环境 + 多周期趋势 + 相对强度 + 流动性 + 风险一致性\n"
+                    f"**判断方法：** 市场环境 + 多周期趋势 + 相对强度 + 资金链路 + 风险一致性\n"
                     f"**市场：** {market_label}　**环境：** {picks[0].regime if picks else '未知'}　"
                     f"**生成：** {datetime.now().strftime('%Y-%m-%d %H:%M')}"
                 ),
@@ -87,6 +87,9 @@ def build_strategy_card(
                             f"5日 **{pick.return_5d:+.2f}%**　20日 **{pick.return_20d:+.2f}%**\n"
                             f"相对基准 **{pick.relative_strength_20d:+.2f}%**　"
                             f"成交活跃度 **{pick.volume_ratio:.2f}**　强弱指标 **{pick.rsi14:.1f}**\n"
+                            f"资金链路 **{pick.capital_trace_score:.0f}/100**　"
+                            f"承接判断 **{pick.capital_trace_label}**　"
+                            f"上涨成交占优 **{pick.accumulation_20d:+.1f}%**\n"
                             f"✅ 判断：{reason_text}\n⚠️ 执行要点：{risk_text}"
                         ),
                     },
@@ -293,6 +296,9 @@ def pick_snapshot(pick: StockPick) -> dict[str, Any]:
         "confidence": pick.confidence,
         "confidence_points": pick.confidence_points,
         "regime": pick.regime,
+        "capital_trace_score": pick.capital_trace_score,
+        "capital_trace_label": pick.capital_trace_label,
+        "accumulation_20d": pick.accumulation_20d,
         "data_date": pick.data_date,
     }
 

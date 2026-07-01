@@ -178,7 +178,8 @@ def build_review_card(
                         f"**{index}. {display_name}（{pick.code}）**　"
                         f"{status}｜综合得分 **{pick.score:.1f}**｜"
                         f"判断把握 **{confidence_text(pick.confidence)}**\n"
-                        f"20日动量 **{pick.return_20d:+.2f}%**｜相对基准 **{pick.relative_strength_20d:+.2f}%**"
+                        f"20日动量 **{pick.return_20d:+.2f}%**｜相对基准 **{pick.relative_strength_20d:+.2f}%**｜"
+                        f"资金链路 **{pick.capital_trace_score:.0f}/100**"
                     ),
                 },
             }
