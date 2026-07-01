@@ -2,9 +2,9 @@ name: Stock Strategy Key Cards
 
 on:
   schedule:
-    - cron: "10 1 * * 1-5"   # 09:10 Asia/Shanghai, A-share pre-open
-    - cron: "20 1 * * 1-5"   # 09:20 Asia/Shanghai, A-share pre-open backup
-    - cron: "35 1 * * 1-5"   # 09:35 Asia/Shanghai, A-share pre-open backup
+    - cron: "0 1 * * 1-5"    # 09:00 Asia/Shanghai, A-share pre-open early run
+    - cron: "10 1 * * 1-5"   # 09:10 Asia/Shanghai, A-share pre-open backup
+    - cron: "20 1 * * 1-5"   # 09:20 Asia/Shanghai, A-share pre-open final backup
     - cron: "20 7 * * 1-5"   # 15:20 Asia/Shanghai, A-share post-close
     - cron: "35 7 * * 1-5"   # 15:35 Asia/Shanghai, A-share post-close backup
     - cron: "50 12 * * 1-5"  # 20:50 Asia/Shanghai, US pre-open early run
@@ -60,6 +60,9 @@ jobs:
       DAILY_CARD_RETENTION_BONUS: ${{ vars.DAILY_CARD_RETENTION_BONUS || '4' }}
       US_MIN_DOLLAR_VOLUME: ${{ vars.US_MIN_DOLLAR_VOLUME || '20000000' }}
       A_MIN_TURNOVER_CNY: ${{ vars.A_MIN_TURNOVER_CNY || '100000000' }}
+      PAPER_TRADING_ENABLED: ${{ vars.PAPER_TRADING_ENABLED || 'true' }}
+      PAPER_TRADING_CN_CAPITAL: ${{ vars.PAPER_TRADING_CN_CAPITAL || '10000' }}
+      PAPER_TRADING_US_CAPITAL: ${{ vars.PAPER_TRADING_US_CAPITAL || '10000' }}
 
     steps:
       - name: Checkout automation branch
@@ -81,7 +84,9 @@ jobs:
       - name: Restore daily strategy state
         uses: actions/cache/restore@v4
         with:
-          path: data/daily_card_state.json
+          path: |
+            data/daily_card_state.json
+            data/paper_trade_state.json
           key: stock-strategy-daily-state-${{ github.run_id }}
           restore-keys: |
             stock-strategy-daily-state-
@@ -100,7 +105,7 @@ jobs:
           else
             force="false"
             case "${{ github.event.schedule }}" in
-              "10 1 * * 1-5"|"20 1 * * 1-5"|"35 1 * * 1-5") task="cn-preopen" ;;
+              "0 1 * * 1-5"|"10 1 * * 1-5"|"20 1 * * 1-5") task="cn-preopen" ;;
               "20 7 * * 1-5"|"35 7 * * 1-5") task="cn-review" ;;
               "50 12 * * 1-5"|"0 13 * * 1-5"|"10 13 * * 1-5"|"20 13 * * 1-5"|"25 13 * * 1-5") task="us-preopen" ;;
               "30 22 * * 1-5"|"45 22 * * 1-5") task="us-review" ;;
@@ -142,10 +147,13 @@ jobs:
         run: |
           mkdir -p data
           test -f data/daily_card_state.json || echo "{}" > data/daily_card_state.json
+          test -f data/paper_trade_state.json || echo "{}" > data/paper_trade_state.json
 
       - name: Save daily strategy state
         if: always()
         uses: actions/cache/save@v4
         with:
-          path: data/daily_card_state.json
+          path: |
+            data/daily_card_state.json
+            data/paper_trade_state.json
           key: stock-strategy-daily-state-${{ github.run_id }}

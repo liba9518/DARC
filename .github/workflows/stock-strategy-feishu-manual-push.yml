@@ -57,6 +57,9 @@ jobs:
       INTRADAY_EXTREME_THRESHOLD: ${{ vars.INTRADAY_EXTREME_THRESHOLD || '3.5' }}
       INTRADAY_STEP_THRESHOLD: ${{ vars.INTRADAY_STEP_THRESHOLD || '1.2' }}
       INTRADAY_COOLDOWN_MINUTES: ${{ vars.INTRADAY_COOLDOWN_MINUTES || '60' }}
+      PAPER_TRADING_ENABLED: ${{ vars.PAPER_TRADING_ENABLED || 'true' }}
+      PAPER_TRADING_CN_CAPITAL: ${{ vars.PAPER_TRADING_CN_CAPITAL || '10000' }}
+      PAPER_TRADING_US_CAPITAL: ${{ vars.PAPER_TRADING_US_CAPITAL || '10000' }}
 
     steps:
       - name: Checkout automation branch
@@ -81,6 +84,7 @@ jobs:
           path: |
             data/daily_card_state.json
             data/intraday_alert_state.json
+            data/paper_trade_state.json
           key: stock-strategy-feishu-state-${{ github.run_id }}
           restore-keys: |
             stock-strategy-daily-state-
@@ -153,6 +157,7 @@ jobs:
           mkdir -p data
           test -f data/daily_card_state.json || echo "{}" > data/daily_card_state.json
           test -f data/intraday_alert_state.json || echo "{}" > data/intraday_alert_state.json
+          test -f data/paper_trade_state.json || echo "{}" > data/paper_trade_state.json
 
       - name: Save strategy state
         if: always()
@@ -161,4 +166,5 @@ jobs:
           path: |
             data/daily_card_state.json
             data/intraday_alert_state.json
+            data/paper_trade_state.json
           key: stock-strategy-feishu-state-${{ github.run_id }}

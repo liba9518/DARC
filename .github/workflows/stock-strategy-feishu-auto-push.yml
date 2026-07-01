@@ -2,8 +2,6 @@ name: Stock Strategy Feishu Auto Push Backup
 
 on:
   schedule:
-    - cron: "15 1 * * 1-5"   # 09:15 Asia/Shanghai, A-share pre-open backup
-    - cron: "40 1 * * 1-5"   # 09:40 Asia/Shanghai, A-share pre-open backup
     - cron: "25 7 * * 1-5"   # 15:25 Asia/Shanghai, A-share post-close backup
     - cron: "40 7 * * 1-5"   # 15:40 Asia/Shanghai, A-share post-close backup
     - cron: "5 13 * * 1-5"   # 21:05 Asia/Shanghai, US pre-open backup
@@ -57,6 +55,9 @@ jobs:
       DAILY_CARD_RETENTION_BONUS: ${{ vars.DAILY_CARD_RETENTION_BONUS || '4' }}
       US_MIN_DOLLAR_VOLUME: ${{ vars.US_MIN_DOLLAR_VOLUME || '20000000' }}
       A_MIN_TURNOVER_CNY: ${{ vars.A_MIN_TURNOVER_CNY || '100000000' }}
+      PAPER_TRADING_ENABLED: ${{ vars.PAPER_TRADING_ENABLED || 'true' }}
+      PAPER_TRADING_CN_CAPITAL: ${{ vars.PAPER_TRADING_CN_CAPITAL || '10000' }}
+      PAPER_TRADING_US_CAPITAL: ${{ vars.PAPER_TRADING_US_CAPITAL || '10000' }}
 
     steps:
       - name: Checkout automation branch
@@ -78,7 +79,9 @@ jobs:
       - name: Restore daily strategy state
         uses: actions/cache/restore@v4
         with:
-          path: data/daily_card_state.json
+          path: |
+            data/daily_card_state.json
+            data/paper_trade_state.json
           key: stock-strategy-daily-state-backup-${{ github.run_id }}
           restore-keys: |
             stock-strategy-daily-state-
@@ -97,7 +100,6 @@ jobs:
           else
             force="false"
             case "${{ github.event.schedule }}" in
-              "15 1 * * 1-5"|"40 1 * * 1-5") task="cn-preopen" ;;
               "25 7 * * 1-5"|"40 7 * * 1-5") task="cn-review" ;;
               "5 13 * * 1-5"|"15 13 * * 1-5"|"28 13 * * 1-5") task="us-preopen" ;;
               "35 22 * * 1-5"|"50 22 * * 1-5") task="us-review" ;;
@@ -139,10 +141,13 @@ jobs:
         run: |
           mkdir -p data
           test -f data/daily_card_state.json || echo "{}" > data/daily_card_state.json
+          test -f data/paper_trade_state.json || echo "{}" > data/paper_trade_state.json
 
       - name: Save daily strategy state
         if: always()
         uses: actions/cache/save@v4
         with:
-          path: data/daily_card_state.json
+          path: |
+            data/daily_card_state.json
+            data/paper_trade_state.json
           key: stock-strategy-daily-state-${{ github.run_id }}
