@@ -6,6 +6,7 @@ on:
     - cron: "40 1 * * 1-5"   # 09:40 Asia/Shanghai, A-share pre-open backup
     - cron: "25 7 * * 1-5"   # 15:25 Asia/Shanghai, A-share post-close backup
     - cron: "40 7 * * 1-5"   # 15:40 Asia/Shanghai, A-share post-close backup
+    - cron: "5 13 * * 1-5"   # 21:05 Asia/Shanghai, US pre-open backup
     - cron: "15 13 * * 1-5"  # 21:15 Asia/Shanghai, US pre-open backup
     - cron: "28 13 * * 1-5"  # 21:28 Asia/Shanghai, US pre-open final backup
     - cron: "35 22 * * 1-5"  # 06:35 Asia/Shanghai next day, US post-close backup
@@ -98,7 +99,7 @@ jobs:
             case "${{ github.event.schedule }}" in
               "15 1 * * 1-5"|"40 1 * * 1-5") task="cn-preopen" ;;
               "25 7 * * 1-5"|"40 7 * * 1-5") task="cn-review" ;;
-              "15 13 * * 1-5"|"28 13 * * 1-5") task="us-preopen" ;;
+              "5 13 * * 1-5"|"15 13 * * 1-5"|"28 13 * * 1-5") task="us-preopen" ;;
               "35 22 * * 1-5"|"50 22 * * 1-5") task="us-review" ;;
               *) echo "Unknown schedule: ${{ github.event.schedule }}" >&2; exit 1 ;;
             esac
