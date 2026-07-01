@@ -27,6 +27,10 @@ from scripts.push_strategy_digest import configure_console_encoding
 ALERT_STATE_PATH = ROOT / "data" / "intraday_alert_state.json"
 
 
+def intraday_status_on_idle_enabled() -> bool:
+    return os.getenv("FEISHU_INTRADAY_STATUS_ON_IDLE", "false").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def market_is_open(market: str, now: datetime | None = None) -> bool:
     timezone = ZoneInfo("America/New_York") if market == "us" else ZoneInfo("Asia/Shanghai")
     current = now or datetime.now(timezone)
@@ -193,6 +197,60 @@ def build_alert_card(market: str, alerts: list[dict[str, Any]]) -> dict[str, Any
     )
 
 
+def build_idle_status_card(market: str, entries_count: int, now: datetime) -> dict[str, Any]:
+    is_us = market == "us"
+    return sanitize_card(
+        {
+            "config": {"wide_screen_mode": True},
+            "header": {
+                "template": "blue" if is_us else "green",
+                "title": {
+                    "tag": "plain_text",
+                    "content": "🇺🇸 美股盘中监控｜运行状态" if is_us else "🇨🇳 A股盘中监控｜运行状态",
+                },
+            },
+            "elements": [
+                {
+                    "tag": "div",
+                    "text": {
+                        "tag": "lark_md",
+                        "content": (
+                            "**明确结论：** 云端盘中监控已经正常运行，目前没有达到异动提醒门槛。\n"
+                            "**处理意见：** 继续盯住精选名单，出现明显放量或价格异动时再推送提醒。\n"
+                            f"**检查范围：** 已检查 {entries_count} 只精选标的　"
+                            f"**检查时间：** {now.strftime('%Y-%m-%d %H:%M')}"
+                        ),
+                    },
+                },
+                {
+                    "tag": "note",
+                    "elements": [
+                        {
+                            "tag": "plain_text",
+                            "content": "这张状态卡用于确认云端盘中监控仍在运行；同一市场每天最多发送一次。",
+                        }
+                    ],
+                },
+            ],
+        }
+    )
+
+
+def send_idle_status_once(state: dict[str, Any], market: str, entries_count: int, now: datetime) -> bool:
+    state_key = f"{market}_intraday_idle"
+    signature = f"{now.strftime('%Y-%m-%d')}|{market}|no_intraday_alert"
+    status_state = state.setdefault("idle_status", {})
+    if status_state.get(state_key) == signature:
+        print("盘中运行状态卡今日已发送，跳过重复提醒")
+        return False
+    send_card(build_idle_status_card(market, entries_count, now))
+    status_state[state_key] = signature
+    status_state[f"{state_key}_at"] = now.isoformat(timespec="seconds")
+    state["updated_at"] = now.isoformat(timespec="seconds")
+    save_alert_state(state)
+    return True
+
+
 def run_once(*, market: str, dry_run: bool = False) -> None:
     load_dotenv(ROOT / ".env")
     if not market_is_open(market):
@@ -238,6 +296,11 @@ def run_once(*, market: str, dry_run: bool = False) -> None:
         return
     save_alert_state(state)
     if not alerts:
+        if intraday_status_on_idle_enabled():
+            sent_status = send_idle_status_once(state, market, len(entries), now)
+            if sent_status:
+                print("盘中运行状态卡已推送")
+                return
         print("没有达到推送门槛")
         return
     send_card(build_alert_card(market, alerts))
