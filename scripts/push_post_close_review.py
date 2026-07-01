@@ -32,6 +32,7 @@ from scripts.push_daily_strategy_cards import (
     send_status_card_once,
     status_on_skip_enabled,
 )
+from scripts.paper_trading import build_paper_element, mark_to_market
 from scripts.push_strategy_digest import configure_console_encoding, parse_tickers
 
 
@@ -222,6 +223,23 @@ def build_review_card(
     }
 
 
+def append_paper_review_element(
+    card: dict[str, Any],
+    market: str,
+    latest: dict[str, dict[str, Any]],
+    *,
+    dry_run: bool,
+) -> None:
+    paper_summary = mark_to_market(market, latest, dry_run=dry_run)
+    paper_element = build_paper_element(paper_summary, mode="review")
+    if not paper_element:
+        return
+    elements = card.setdefault("elements", [])
+    insert_at = max(0, len(elements) - 1)
+    elements.insert(insert_at, {"tag": "hr"})
+    elements.insert(insert_at + 1, paper_element)
+
+
 def review_signature(market: str, results: list[dict[str, Any]], next_picks: list[StockPick]) -> str:
     data_date = next_picks[0].data_date if next_picks else "none"
     return "|".join([market, data_date, *(item["code"] for item in results), *(pick.code for pick in next_picks)])
@@ -267,11 +285,13 @@ def run_once(*, market: str, dry_run: bool = False, force: bool = False) -> None
     signature = review_signature(market, results, next_picks)
 
     if dry_run:
+        append_paper_review_element(card, market, latest, dry_run=True)
         print(json.dumps(card, ensure_ascii=False, indent=2))
         return
     if not force and previous.get("review_signature") == signature:
         print(f"{state_key.upper()} 收盘数据与复盘结论未变化，跳过重复推送")
         return
+    append_paper_review_element(card, market, latest, dry_run=False)
     send_card(card)
     previous["review_signature"] = signature
     previous["reviewed_at"] = datetime.now().isoformat(timespec="seconds")

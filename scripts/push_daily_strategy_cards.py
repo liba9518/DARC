@@ -27,6 +27,7 @@ if str(ROOT) not in sys.path:
 from integrations.a_stock_direct import fetch_tencent_quotes
 from integrations.card_language import confidence_text, sanitize_card, stock_display_name
 from integrations.daily_stock_selector import StockPick, select_daily_picks
+from scripts.paper_trading import build_paper_element, rebalance_to_picks
 from scripts.push_strategy_digest import configure_console_encoding, parse_tickers
 
 
@@ -303,6 +304,23 @@ def pick_snapshot(pick: StockPick) -> dict[str, Any]:
     }
 
 
+def append_paper_trading_element(
+    card: dict[str, Any],
+    market: str,
+    picks: list[StockPick],
+    *,
+    dry_run: bool,
+) -> None:
+    paper_summary = rebalance_to_picks(market, picks, dry_run=dry_run)
+    paper_element = build_paper_element(paper_summary, mode="rebalance")
+    if not paper_element:
+        return
+    elements = card.setdefault("elements", [])
+    insert_at = max(0, len(elements) - 1)
+    elements.insert(insert_at, {"tag": "hr"})
+    elements.insert(insert_at + 1, paper_element)
+
+
 def generate_market_selection(market: str) -> tuple[list[StockPick], list[str]]:
     count = max(1, int(os.getenv("DAILY_CARD_PICK_COUNT", "3")))
     retention_bonus = max(0.0, float(os.getenv("DAILY_CARD_RETENTION_BONUS", "4")))
@@ -396,6 +414,13 @@ def run_once(*, market: str = "both", dry_run: bool = False, force: bool = False
                 errors=errors,
             )
     if dry_run:
+        for selected_market in markets:
+            append_paper_trading_element(
+                cards[selected_market],
+                selected_market,
+                picks_by_market[selected_market],
+                dry_run=True,
+            )
         print(json.dumps(cards, ensure_ascii=False, indent=2))
         return
     state = load_state()
@@ -429,6 +454,7 @@ def run_once(*, market: str = "both", dry_run: bool = False, force: bool = False
         if not force and state.get(state_key, {}).get("signature") == signature:
             print(f"{state_key.upper()} 行情日期与名单未变化，跳过重复推送")
             continue
+        append_paper_trading_element(cards[selected_market], selected_market, picks, dry_run=False)
         send_card(cards[selected_market])
         state[state_key] = {
             "signature": signature,
