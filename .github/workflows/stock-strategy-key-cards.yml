@@ -84,11 +84,19 @@ jobs:
       - name: Restore daily strategy state
         uses: actions/cache/restore@v4
         with:
-          path: |
-            data/daily_card_state.json
-            data/paper_trade_state.json
+          path: data/daily_card_state.json
           key: stock-strategy-daily-state-${{ github.run_id }}
           restore-keys: |
+            stock-strategy-daily-state-
+            stock-strategy-feishu-state-
+
+      - name: Restore paper trading state
+        uses: actions/cache/restore@v4
+        with:
+          path: data/paper_trade_state.json
+          key: stock-strategy-paper-state-${{ github.run_id }}
+          restore-keys: |
+            stock-strategy-paper-state-
             stock-strategy-daily-state-
             stock-strategy-feishu-state-
 
@@ -153,7 +161,12 @@ jobs:
         if: always()
         uses: actions/cache/save@v4
         with:
-          path: |
-            data/daily_card_state.json
-            data/paper_trade_state.json
+          path: data/daily_card_state.json
           key: stock-strategy-daily-state-${{ github.run_id }}
+
+      - name: Save paper trading state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: data/paper_trade_state.json
+          key: stock-strategy-paper-state-${{ github.run_id }}

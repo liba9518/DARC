@@ -58,8 +58,13 @@ jobs:
       INTRADAY_STEP_THRESHOLD: ${{ vars.INTRADAY_STEP_THRESHOLD || '1.2' }}
       INTRADAY_COOLDOWN_MINUTES: ${{ vars.INTRADAY_COOLDOWN_MINUTES || '60' }}
       PAPER_TRADING_ENABLED: ${{ vars.PAPER_TRADING_ENABLED || 'true' }}
+      PAPER_TRADING_RISK_CONTROL_ENABLED: ${{ vars.PAPER_TRADING_RISK_CONTROL_ENABLED || 'true' }}
       PAPER_TRADING_CN_CAPITAL: ${{ vars.PAPER_TRADING_CN_CAPITAL || '10000' }}
       PAPER_TRADING_US_CAPITAL: ${{ vars.PAPER_TRADING_US_CAPITAL || '10000' }}
+      PAPER_TRADING_STOP_LOSS_PCT: ${{ vars.PAPER_TRADING_STOP_LOSS_PCT || '5' }}
+      PAPER_TRADING_TAKE_PROFIT_PCT: ${{ vars.PAPER_TRADING_TAKE_PROFIT_PCT || '8' }}
+      PAPER_TRADING_TRAILING_TAKE_PROFIT_DRAWDOWN_PCT: ${{ vars.PAPER_TRADING_TRAILING_TAKE_PROFIT_DRAWDOWN_PCT || '4' }}
+      PAPER_TRADING_TRAILING_TAKE_PROFIT_ARM_PCT: ${{ vars.PAPER_TRADING_TRAILING_TAKE_PROFIT_ARM_PCT || '8' }}
 
     steps:
       - name: Checkout automation branch
@@ -84,9 +89,19 @@ jobs:
           path: |
             data/daily_card_state.json
             data/intraday_alert_state.json
-            data/paper_trade_state.json
           key: stock-strategy-feishu-state-${{ github.run_id }}
           restore-keys: |
+            stock-strategy-daily-state-
+            stock-strategy-intraday-state-
+            stock-strategy-feishu-state-
+
+      - name: Restore paper trading state
+        uses: actions/cache/restore@v4
+        with:
+          path: data/paper_trade_state.json
+          key: stock-strategy-paper-state-manual-${{ github.run_id }}
+          restore-keys: |
+            stock-strategy-paper-state-
             stock-strategy-daily-state-
             stock-strategy-intraday-state-
             stock-strategy-feishu-state-
@@ -166,5 +181,11 @@ jobs:
           path: |
             data/daily_card_state.json
             data/intraday_alert_state.json
-            data/paper_trade_state.json
           key: stock-strategy-feishu-state-${{ github.run_id }}
+
+      - name: Save paper trading state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: data/paper_trade_state.json
+          key: stock-strategy-paper-state-${{ github.run_id }}
