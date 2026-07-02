@@ -23,6 +23,8 @@
 
 关键卡片补跑不会重复发送同一份名单：脚本会根据市场、行情日期和股票名单生成签名，已推送过的内容会自动跳过。
 
+盘前策略卡和收盘复盘卡会展示对应市场的大盘指数价格：A股展示上证指数、深证成指、创业板指；美股展示标普五百、纳斯达克、道琼斯。指数获取失败不会阻断精选股票推送。
+
 ## 2. 必填密钥
 
 在 GitHub 仓库页面进入：
@@ -78,6 +80,11 @@ FEISHU_WEBHOOK_KEYWORD
 PAPER_TRADING_ENABLED
 PAPER_TRADING_CN_CAPITAL
 PAPER_TRADING_US_CAPITAL
+PAPER_TRADING_RISK_CONTROL_ENABLED
+PAPER_TRADING_STOP_LOSS_PCT
+PAPER_TRADING_TAKE_PROFIT_PCT
+PAPER_TRADING_TRAILING_TAKE_PROFIT_DRAWDOWN_PCT
+PAPER_TRADING_TRAILING_TAKE_PROFIT_ARM_PCT
 ```
 
 不配置时，工作流会使用仓库内置默认值。
@@ -87,6 +94,8 @@ PAPER_TRADING_US_CAPITAL
 `FEISHU_INTRADAY_STATUS_ON_IDLE` 用于控制盘中“暂无明显异动”的状态卡。云端盘中监控工作流默认开启：监控正常运行但没有达到异动门槛时，每个市场每天最多发送一张状态卡，避免群里长时间没有系统反馈。
 
 `PAPER_TRADING_ENABLED` 用于控制模拟跟单。云端工作流默认开启；A股默认模拟本金为 `10000` 人民币，美股默认模拟本金为 `10000` 美元，可分别用 `PAPER_TRADING_CN_CAPITAL` 和 `PAPER_TRADING_US_CAPITAL` 覆盖。模拟跟单只记录策略调仓、持仓市值和盈亏，不连接券商、不下真实订单。
+
+`PAPER_TRADING_RISK_CONTROL_ENABLED` 用于控制模拟跟单的盘中止盈止损纪律，云端盘中监控默认开启。默认纪律线为：亏损达到 `PAPER_TRADING_STOP_LOSS_PCT=5` 时模拟止损；盈利达到 `PAPER_TRADING_TAKE_PROFIT_PCT=8` 时模拟止盈；最高浮盈达到 `PAPER_TRADING_TRAILING_TAKE_PROFIT_ARM_PCT=8` 后，若回撤达到 `PAPER_TRADING_TRAILING_TAKE_PROFIT_DRAWDOWN_PCT=4`，则触发移动止盈。以上只更新模拟账本并推送飞书处理卡，不会真实下单。
 
 ## 4. 手动测试
 

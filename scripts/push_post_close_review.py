@@ -25,6 +25,8 @@ from scripts.push_daily_strategy_cards import (
     DEFAULT_A_POOL,
     DEFAULT_US_POOL,
     build_status_card,
+    fetch_market_indices,
+    format_market_indices,
     generate_market_selection,
     load_state,
     save_state,
@@ -114,6 +116,7 @@ def build_review_card(
     next_picks: list[StockPick],
     previous_codes: list[str],
     *,
+    market_indices: list[dict[str, Any]] | None = None,
     errors: list[str],
 ) -> dict[str, Any]:
     is_us = market == "us"
@@ -125,6 +128,7 @@ def build_review_card(
         if average is not None
         else "尚无可比入选价格，本次开始建立跟踪基线"
     )
+    index_text = format_market_indices(market_indices or [])
     elements: list[dict[str, Any]] = [
         {
             "tag": "div",
@@ -133,6 +137,7 @@ def build_review_card(
                 "content": (
                     f"**复盘结论：** {summary_label}\n"
                     f"**当日统计：** {summary_text}\n"
+                    f"**大盘指数：** {index_text}\n"
                     f"**收盘环境：** {next_picks[0].regime if next_picks else '未知'}　"
                     f"**生成：** {datetime.now().strftime('%Y-%m-%d %H:%M')}"
                 ),
@@ -281,7 +286,14 @@ def run_once(*, market: str, dry_run: bool = False, force: bool = False) -> None
                 print(f"{state_key.upper()} 收盘复盘状态卡已推送")
         return
     errors = [*quote_errors, *selection_errors]
-    card = build_review_card(market, results, next_picks, previous_codes, errors=errors)
+    card = build_review_card(
+        market,
+        results,
+        next_picks,
+        previous_codes,
+        market_indices=fetch_market_indices(market),
+        errors=errors,
+    )
     signature = review_signature(market, results, next_picks)
 
     if dry_run:

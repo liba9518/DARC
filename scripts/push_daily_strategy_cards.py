@@ -18,6 +18,7 @@ from zoneinfo import ZoneInfo
 
 import requests
 import schedule
+import yfinance as yf
 from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -36,6 +37,18 @@ DEFAULT_A_POOL = "600519,300750,002594,601138,000063,002475,300308,688041,600276
 STATE_PATH = ROOT / "data" / "daily_card_state.json"
 
 
+CN_INDEX_SYMBOLS = (
+    ("sh000001", "上证指数"),
+    ("sz399001", "深证成指"),
+    ("sz399006", "创业板指"),
+)
+US_INDEX_SYMBOLS = (
+    ("^GSPC", "标普五百"),
+    ("^IXIC", "纳斯达克"),
+    ("^DJI", "道琼斯"),
+)
+
+
 def _sign(secret: str) -> dict[str, str]:
     timestamp = str(int(time.time()))
     string_to_sign = f"{timestamp}\n{secret}"
@@ -51,8 +64,10 @@ def build_strategy_card(
     picks: list[StockPick],
     *,
     template: str,
+    market_indices: list[dict[str, Any]] | None = None,
     errors: list[str] | None = None,
 ) -> dict[str, Any]:
+    index_text = format_market_indices(market_indices or [])
     elements: list[dict[str, Any]] = [
         {
             "tag": "div",
@@ -61,6 +76,7 @@ def build_strategy_card(
                 "content": (
                     f"**今日结论：** 以下三只已经通过趋势、强弱和成交活跃度筛选，优先关注。\n"
                     f"**判断方法：** 市场环境 + 多周期趋势 + 相对强度 + 资金链路 + 风险一致性\n"
+                    f"**大盘指数：** {index_text}\n"
                     f"**市场：** {market_label}　**环境：** {picks[0].regime if picks else '未知'}　"
                     f"**生成：** {datetime.now().strftime('%Y-%m-%d %H:%M')}"
                 ),
@@ -153,6 +169,79 @@ def send_card(card: dict[str, Any]) -> None:
 
 def _env_flag(name: str, default: str = "false") -> bool:
     return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _safe_float(value: Any) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def fetch_cn_market_indices() -> list[dict[str, Any]]:
+    try:
+        query = ",".join(symbol for symbol, _ in CN_INDEX_SYMBOLS)
+        response = requests.get(
+            "https://qt.gtimg.cn/q=" + query,
+            headers={"User-Agent": "Mozilla/5.0 daily-stock-analysis/1.0"},
+            timeout=15,
+        )
+        response.raise_for_status()
+        response.encoding = "gbk"
+    except Exception:
+        return []
+    names = dict(CN_INDEX_SYMBOLS)
+    rows: list[dict[str, Any]] = []
+    for line in response.text.splitlines():
+        if '"' not in line:
+            continue
+        symbol = line.split("=", 1)[0].replace("v_", "").strip()
+        fields = line.split('"', 2)[1].split("~")
+        if len(fields) < 33:
+            continue
+        price = _safe_float(fields[3])
+        if price <= 0:
+            continue
+        rows.append(
+            {
+                "name": names.get(symbol, fields[1] or symbol),
+                "price": price,
+                "pct_change": _safe_float(fields[32]),
+            }
+        )
+    return rows
+
+
+def fetch_us_market_indices() -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for symbol, name in US_INDEX_SYMBOLS:
+        try:
+            history = yf.Ticker(symbol).history(period="5d", interval="1d", auto_adjust=True)
+        except Exception:
+            continue
+        if history is None or history.empty or "Close" not in history:
+            continue
+        close = history["Close"].dropna().astype(float)
+        if close.empty:
+            continue
+        price = float(close.iloc[-1])
+        previous = float(close.iloc[-2]) if len(close) >= 2 else 0.0
+        pct_change = (price / previous - 1) * 100 if previous > 0 else 0.0
+        rows.append({"name": name, "price": price, "pct_change": pct_change})
+    return rows
+
+
+def fetch_market_indices(market: str) -> list[dict[str, Any]]:
+    return fetch_us_market_indices() if market == "us" else fetch_cn_market_indices()
+
+
+def format_market_indices(indices: list[dict[str, Any]]) -> str:
+    if not indices:
+        return "暂未取到大盘指数，策略推送继续执行"
+    return "；".join(
+        f"{item['name']} {float(item['price']):.2f}（{float(item.get('pct_change') or 0):+.2f}%）"
+        for item in indices[:3]
+    )
 
 
 def status_on_skip_enabled() -> bool:
@@ -370,12 +459,15 @@ def generate_selections() -> tuple[list[StockPick], list[StockPick], list[str], 
 def generate_cards() -> tuple[dict[str, Any], dict[str, Any]]:
     count = max(1, int(os.getenv("DAILY_CARD_PICK_COUNT", "3")))
     us_picks, a_picks, us_errors, a_errors = generate_selections()
+    us_indices = fetch_market_indices("us")
+    a_indices = fetch_market_indices("cn")
 
     us_card = build_strategy_card(
         f"🇺🇸 美股盘前策略｜精选{count}只",
         "美国股票",
         us_picks,
         template="blue",
+        market_indices=us_indices,
         errors=us_errors,
     )
     a_card = build_strategy_card(
@@ -383,6 +475,7 @@ def generate_cards() -> tuple[dict[str, Any], dict[str, Any]]:
         "沪深A股",
         a_picks,
         template="green",
+        market_indices=a_indices,
         errors=a_errors,
     )
     return us_card, a_card
@@ -396,6 +489,7 @@ def run_once(*, market: str = "both", dry_run: bool = False, force: bool = False
     picks_by_market: dict[str, list[StockPick]] = {}
     for selected_market in markets:
         picks, errors = generate_market_selection(selected_market)
+        market_indices = fetch_market_indices(selected_market)
         picks_by_market[selected_market] = picks
         if selected_market == "us":
             cards[selected_market] = build_strategy_card(
@@ -403,6 +497,7 @@ def run_once(*, market: str = "both", dry_run: bool = False, force: bool = False
                 "美国股票",
                 picks,
                 template="blue",
+                market_indices=market_indices,
                 errors=errors,
             )
         else:
@@ -411,6 +506,7 @@ def run_once(*, market: str = "both", dry_run: bool = False, force: bool = False
                 "沪深A股",
                 picks,
                 template="green",
+                market_indices=market_indices,
                 errors=errors,
             )
     if dry_run:

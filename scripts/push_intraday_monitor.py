@@ -20,6 +20,7 @@ if str(ROOT) not in sys.path:
 
 from integrations.a_stock_direct import fetch_tencent_quotes
 from integrations.card_language import sanitize_card, stock_display_name
+from scripts.paper_trading import apply_risk_controls
 from scripts.push_daily_strategy_cards import load_state, send_card
 from scripts.push_strategy_digest import configure_console_encoding
 
@@ -197,6 +198,69 @@ def build_alert_card(market: str, alerts: list[dict[str, Any]]) -> dict[str, Any
     )
 
 
+def build_risk_control_card(market: str, summary: dict[str, Any]) -> dict[str, Any]:
+    triggered = list(summary.get("triggered") or [])
+    is_us = market == "us"
+    has_stop_loss = any(str(item.get("rule")) == "止损" for item in triggered)
+    title = "🇺🇸 美股模拟跟单止盈止损处理" if is_us else "🇨🇳 A股模拟跟单止盈止损处理"
+    currency = summary.get("currency") or ""
+    elements: list[dict[str, Any]] = [
+        {
+            "tag": "div",
+            "text": {
+                "tag": "lark_md",
+                "content": (
+                    f"**明确结论：** 模拟盘已自动处理达到纪律线的持仓，共 {len(triggered)} 只。\n"
+                    f"**账户状态：** 当前市值 **{summary['total_value']:.2f} {currency}**｜"
+                    f"累计盈亏 **{summary['pnl']:+.2f} {currency}（{summary['pnl_pct']:+.2f}%）**｜"
+                    f"剩余持仓 **{summary['positions_count']} 只**"
+                ),
+            },
+        },
+        {"tag": "hr"},
+    ]
+    for item in triggered:
+        display_name = stock_display_name(str(item["code"]), str(item["name"]))
+        elements.append(
+            {
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": (
+                        f"**{item['rule']}：{display_name}（{item['code']}）**\n"
+                        f"处理价格 **{item['price']:.2f}**｜成本 **{item['avg_price']:.2f}**｜"
+                        f"本笔变化 **{item['pnl_pct']:+.2f}%**｜最高浮盈 **{item['highest_return_pct']:+.2f}%**\n"
+                        f"**处理意见：** {item['reason']}"
+                    ),
+                },
+            }
+        )
+    elements.append(
+        {
+            "tag": "note",
+            "elements": [
+                {
+                    "tag": "plain_text",
+                    "content": (
+                        f"模拟纪律线：止损 {summary['stop_loss_pct']:.1f}%；止盈 {summary['take_profit_pct']:.1f}%；"
+                        f"移动止盈回撤 {summary['trailing_drawdown_pct']:.1f}%。仅为模拟盘记录，不会真实下单。"
+                    ),
+                }
+            ],
+        }
+    )
+    return sanitize_card(
+        {
+            "config": {"wide_screen_mode": True},
+            "header": {
+                "template": "red" if has_stop_loss else "green",
+                "title": {"tag": "plain_text", "content": title},
+            },
+            "elements": elements,
+        }
+    )
+
+
 def build_idle_status_card(market: str, entries_count: int, now: datetime) -> dict[str, Any]:
     is_us = market == "us"
     return sanitize_card(
@@ -264,6 +328,7 @@ def run_once(*, market: str, dry_run: bool = False) -> None:
     state = load_alert_state()
     market_state = state.setdefault(market, {})
     now = datetime.now(ZoneInfo("America/New_York") if market == "us" else ZoneInfo("Asia/Shanghai"))
+    risk_summary = apply_risk_controls(market, quotes, dry_run=dry_run)
     alerts = []
     for entry in entries:
         code = str(entry.get("code") or "").upper()
@@ -292,9 +357,16 @@ def run_once(*, market: str, dry_run: bool = False) -> None:
             market_state[code]["last_alert_at"] = now.isoformat(timespec="seconds")
     state["updated_at"] = now.isoformat(timespec="seconds")
     if dry_run:
+        if risk_summary and risk_summary.get("triggered_count"):
+            print(json.dumps(build_risk_control_card(market, risk_summary), ensure_ascii=False, indent=2))
+            return
         print(json.dumps(build_alert_card(market, alerts), ensure_ascii=False, indent=2) if alerts else "没有达到推送门槛")
         return
     save_alert_state(state)
+    if risk_summary and risk_summary.get("triggered_count"):
+        send_card(build_risk_control_card(market, risk_summary))
+        print(f"模拟跟单止盈止损处理已推送：{risk_summary['triggered_count']}只")
+        return
     if not alerts:
         if intraday_status_on_idle_enabled():
             sent_status = send_idle_status_once(state, market, len(entries), now)
