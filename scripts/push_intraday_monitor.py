@@ -221,6 +221,9 @@ def build_risk_control_card(market: str, summary: dict[str, Any]) -> dict[str, A
     ]
     for item in triggered:
         display_name = stock_display_name(str(item["code"]), str(item["name"]))
+        trade = item.get("trade") or {}
+        shares = float(trade.get("shares") or item.get("shares") or 0)
+        amount = float(trade.get("amount") or (shares * float(item.get("price") or 0)))
         elements.append(
             {
                 "tag": "div",
@@ -228,7 +231,8 @@ def build_risk_control_card(market: str, summary: dict[str, Any]) -> dict[str, A
                     "tag": "lark_md",
                     "content": (
                         f"**{item['rule']}：{display_name}（{item['code']}）**\n"
-                        f"处理价格 **{item['price']:.2f}**｜成本 **{item['avg_price']:.2f}**｜"
+                        f"买入价 **{item['avg_price']:.2f}**｜卖出价 **{item['price']:.2f}**｜"
+                        f"卖出数量 **{shares:.6f}**｜卖出金额 **{amount:.2f} {currency}**\n"
                         f"本笔变化 **{item['pnl_pct']:+.2f}%**｜最高浮盈 **{item['highest_return_pct']:+.2f}%**\n"
                         f"**处理意见：** {item['reason']}"
                     ),
