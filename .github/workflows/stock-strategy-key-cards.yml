@@ -5,15 +5,16 @@ on:
     - cron: "0 1 * * 1-5"    # 09:00 Asia/Shanghai, A-share pre-open early run
     - cron: "10 1 * * 1-5"   # 09:10 Asia/Shanghai, A-share pre-open backup
     - cron: "20 1 * * 1-5"   # 09:20 Asia/Shanghai, A-share pre-open final backup
+    - cron: "45 3 * * 1-5"   # 11:45 Asia/Shanghai, A-share midday review
     - cron: "20 7 * * 1-5"   # 15:20 Asia/Shanghai, A-share post-close
-    - cron: "35 7 * * 1-5"   # 15:35 Asia/Shanghai, A-share post-close backup
+    - cron: "30 7 * * 1-5"   # 15:30 Asia/Shanghai, A-share post-close backup
+    - cron: "40 7 * * 1-5"   # 15:40 Asia/Shanghai, A-share post-close final backup
     - cron: "50 12 * * 1-5"  # 20:50 Asia/Shanghai, US pre-open early run
-    - cron: "0 13 * * 1-5"   # 21:00 Asia/Shanghai, US pre-open early backup
-    - cron: "10 13 * * 1-5"  # 21:10 Asia/Shanghai, US pre-open
-    - cron: "20 13 * * 1-5"  # 21:20 Asia/Shanghai, US pre-open backup
-    - cron: "25 13 * * 1-5"  # 21:25 Asia/Shanghai, US pre-open backup
+    - cron: "10 13 * * 1-5"  # 21:10 Asia/Shanghai, US pre-open backup
+    - cron: "25 13 * * 1-5"  # 21:25 Asia/Shanghai, US pre-open final backup
     - cron: "30 22 * * 1-5"  # 06:30 Asia/Shanghai next day, US post-close
-    - cron: "45 22 * * 1-5"  # 06:45 Asia/Shanghai next day, US post-close backup
+    - cron: "40 22 * * 1-5"  # 06:40 Asia/Shanghai next day, US post-close backup
+    - cron: "50 22 * * 1-5"  # 06:50 Asia/Shanghai next day, US post-close final backup
   workflow_dispatch:
     inputs:
       task:
@@ -24,6 +25,7 @@ on:
         options:
           - cn-preopen
           - us-preopen
+          - cn-midday-review
           - cn-review
           - us-review
       force:
@@ -63,6 +65,12 @@ jobs:
       PAPER_TRADING_ENABLED: ${{ vars.PAPER_TRADING_ENABLED || 'true' }}
       PAPER_TRADING_CN_CAPITAL: ${{ vars.PAPER_TRADING_CN_CAPITAL || '10000' }}
       PAPER_TRADING_US_CAPITAL: ${{ vars.PAPER_TRADING_US_CAPITAL || '10000' }}
+      DATABASE_PATH: data/stock_analysis.db
+      NEWSNOW_BASE_URL: ${{ vars.NEWSNOW_BASE_URL || 'https://newsnow.busiyi.world' }}
+      NEWS_INTEL_RETENTION_DAYS: ${{ vars.NEWS_INTEL_RETENTION_DAYS || '14' }}
+      NEWS_INTEL_FETCH_TIMEOUT_SEC: ${{ vars.NEWS_INTEL_FETCH_TIMEOUT_SEC || '8' }}
+      NEWS_INTEL_MAX_ITEMS_PER_SOURCE: ${{ vars.NEWS_INTEL_MAX_ITEMS_PER_SOURCE || '50' }}
+      IMPORTANT_MARKET_NEWS_MARKETS: ${{ vars.IMPORTANT_MARKET_NEWS_MARKETS || 'cn,us,global' }}
 
     steps:
       - name: Checkout automation branch
@@ -103,6 +111,10 @@ jobs:
       - name: Prepare runtime directories
         run: mkdir -p data logs reports
 
+      - name: Fetch important market flash news
+        continue-on-error: true
+        run: python scripts/fetch_important_market_news.py
+
       - name: Resolve task
         id: task
         shell: bash
@@ -114,9 +126,10 @@ jobs:
             force="false"
             case "${{ github.event.schedule }}" in
               "0 1 * * 1-5"|"10 1 * * 1-5"|"20 1 * * 1-5") task="cn-preopen" ;;
-              "20 7 * * 1-5"|"35 7 * * 1-5") task="cn-review" ;;
-              "50 12 * * 1-5"|"0 13 * * 1-5"|"10 13 * * 1-5"|"20 13 * * 1-5"|"25 13 * * 1-5") task="us-preopen" ;;
-              "30 22 * * 1-5"|"45 22 * * 1-5") task="us-review" ;;
+              "45 3 * * 1-5") task="cn-midday-review" ;;
+              "20 7 * * 1-5"|"30 7 * * 1-5"|"40 7 * * 1-5") task="cn-review" ;;
+              "50 12 * * 1-5"|"10 13 * * 1-5"|"25 13 * * 1-5") task="us-preopen" ;;
+              "30 22 * * 1-5"|"40 22 * * 1-5"|"50 22 * * 1-5") task="us-review" ;;
               *) echo "Unknown schedule: ${{ github.event.schedule }}" >&2; exit 1 ;;
             esac
           fi
@@ -144,8 +157,9 @@ jobs:
           case "${{ steps.task.outputs.task }}" in
             cn-preopen) python scripts/push_daily_strategy_cards.py --market cn "${force_args[@]}" ;;
             us-preopen) python scripts/push_daily_strategy_cards.py --market us "${force_args[@]}" ;;
-            cn-review) python scripts/push_post_close_review.py --market cn "${force_args[@]}" ;;
-            us-review) python scripts/push_post_close_review.py --market us "${force_args[@]}" ;;
+            cn-midday-review) python scripts/push_post_close_review.py --market cn --session midday "${force_args[@]}" ;;
+            cn-review) python scripts/push_post_close_review.py --market cn --session close "${force_args[@]}" ;;
+            us-review) python scripts/push_post_close_review.py --market us --session close "${force_args[@]}" ;;
             *) echo "Unsupported task: ${{ steps.task.outputs.task }}" >&2; exit 1 ;;
           esac
 

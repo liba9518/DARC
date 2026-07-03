@@ -11,6 +11,7 @@ on:
         options:
           - cn-preopen
           - us-preopen
+          - cn-midday-review
           - cn-review
           - us-review
           - cn-intraday
@@ -65,6 +66,12 @@ jobs:
       PAPER_TRADING_TAKE_PROFIT_PCT: ${{ vars.PAPER_TRADING_TAKE_PROFIT_PCT || '8' }}
       PAPER_TRADING_TRAILING_TAKE_PROFIT_DRAWDOWN_PCT: ${{ vars.PAPER_TRADING_TRAILING_TAKE_PROFIT_DRAWDOWN_PCT || '4' }}
       PAPER_TRADING_TRAILING_TAKE_PROFIT_ARM_PCT: ${{ vars.PAPER_TRADING_TRAILING_TAKE_PROFIT_ARM_PCT || '8' }}
+      DATABASE_PATH: data/stock_analysis.db
+      NEWSNOW_BASE_URL: ${{ vars.NEWSNOW_BASE_URL || 'https://newsnow.busiyi.world' }}
+      NEWS_INTEL_RETENTION_DAYS: ${{ vars.NEWS_INTEL_RETENTION_DAYS || '14' }}
+      NEWS_INTEL_FETCH_TIMEOUT_SEC: ${{ vars.NEWS_INTEL_FETCH_TIMEOUT_SEC || '8' }}
+      NEWS_INTEL_MAX_ITEMS_PER_SOURCE: ${{ vars.NEWS_INTEL_MAX_ITEMS_PER_SOURCE || '50' }}
+      IMPORTANT_MARKET_NEWS_MARKETS: ${{ vars.IMPORTANT_MARKET_NEWS_MARKETS || 'cn,us,global' }}
 
     steps:
       - name: Checkout automation branch
@@ -109,6 +116,10 @@ jobs:
       - name: Prepare runtime directories
         run: mkdir -p data logs reports
 
+      - name: Fetch important market flash news
+        continue-on-error: true
+        run: python scripts/fetch_important_market_news.py
+
       - name: Validate Feishu secret
         shell: bash
         run: |
@@ -131,8 +142,9 @@ jobs:
             case "$1" in
               cn-preopen) python scripts/push_daily_strategy_cards.py --market cn "${force_args[@]}" ;;
               us-preopen) python scripts/push_daily_strategy_cards.py --market us "${force_args[@]}" ;;
-              cn-review) python scripts/push_post_close_review.py --market cn "${force_args[@]}" ;;
-              us-review) python scripts/push_post_close_review.py --market us "${force_args[@]}" ;;
+              cn-midday-review) python scripts/push_post_close_review.py --market cn --session midday "${force_args[@]}" ;;
+              cn-review) python scripts/push_post_close_review.py --market cn --session close "${force_args[@]}" ;;
+              us-review) python scripts/push_post_close_review.py --market us --session close "${force_args[@]}" ;;
               cn-intraday) python scripts/push_intraday_monitor.py --market cn ;;
               us-intraday) python scripts/push_intraday_monitor.py --market us ;;
               *) echo "Unsupported task: $1" >&2; exit 1 ;;
@@ -145,6 +157,7 @@ jobs:
               run_task us-preopen
               ;;
             all-review)
+              run_task cn-midday-review
               run_task cn-review
               run_task us-review
               ;;
@@ -155,6 +168,7 @@ jobs:
             all)
               run_task cn-preopen
               run_task us-preopen
+              run_task cn-midday-review
               run_task cn-review
               run_task us-review
               run_task cn-intraday
