@@ -8,6 +8,7 @@
 
 ```text
 .github/workflows/stock-strategy-key-cards.yml
+.github/workflows/stock-strategy-watchdog.yml
 .github/workflows/stock-strategy-intraday-monitor.yml
 .github/workflows/stock-strategy-feishu-manual-push.yml
 ```
@@ -27,6 +28,8 @@
 盘前策略卡和收盘复盘卡会展示对应市场的大盘指数价格：A股展示上证指数、深证成指、创业板指；美股展示标普五百、纳斯达克、道琼斯。指数获取失败不会阻断精选股票推送。
 
 云端推送前会自动抓取 A股 / 美股相关的重要快讯，只保留命中市场、宏观、指数、监管、财报、芯片、人工智能等关键词的信息。快讯源失败时不会阻断策略卡推送；卡片会显示“暂无新的重要快讯，按既有策略信号执行”。
+
+关键卡片看门狗会在盘前、午间复盘、收盘复盘等关键窗口内重复检查状态缓存：如果发现当天应该推送但状态里还没有成功记录，会自动强制补发一次；如果已经推送过，则只记录“无需补发”，不会重复刷屏。看门狗与关键卡片工作流共用并发锁，避免两个工作流同时推送同一类卡片。
 
 ## 2. 必填密钥
 
@@ -78,6 +81,7 @@ INTRADAY_EXTREME_THRESHOLD
 INTRADAY_STEP_THRESHOLD
 INTRADAY_COOLDOWN_MINUTES
 FEISHU_STATUS_ON_SKIP
+FEISHU_STRATEGY_WATCHDOG_ENABLED
 FEISHU_INTRADAY_STATUS_ON_IDLE
 FEISHU_WEBHOOK_KEYWORD
 PAPER_TRADING_ENABLED
@@ -93,6 +97,8 @@ PAPER_TRADING_TRAILING_TAKE_PROFIT_ARM_PCT
 不配置时，工作流会使用仓库内置默认值。
 
 `FEISHU_STATUS_ON_SKIP` 用于控制“运行状态卡”。云端关键卡片工作流默认开启：当盘前或复盘任务正常运行，但没有生成有效名单时，会发送一张简短状态卡，说明系统仍在运行；重复补跑不会重复发送同一张状态卡。
+
+`FEISHU_STRATEGY_WATCHDOG_ENABLED` 用于控制关键卡片看门狗。云端工作流默认开启：看门狗只在关键推送窗口内发现当天未成功记录时补发，不会替代原来的三次固定推送。
 
 `FEISHU_INTRADAY_STATUS_ON_IDLE` 用于控制盘中“暂无明显异动”的状态卡。云端盘中监控工作流默认开启：监控正常运行但没有达到异动门槛时，每个市场每天最多发送一张状态卡，避免群里长时间没有系统反馈。
 
@@ -130,7 +136,7 @@ data/paper_trade_state.json
 
 ## 6. 注意事项
 
-- GitHub scheduled workflow 不是实时定时器，可能有几分钟延迟，关键卡片已经配置补跑来提高到达率。
+- GitHub scheduled workflow 不是实时定时器，可能有几分钟延迟；关键卡片已经配置固定补跑和看门狗补发来提高到达率，但如果 GitHub 整体队列严重延迟，仍可能出现晚于目标时间送达的情况。
 - 如果仓库长期没有活动，GitHub 可能暂停定时工作流，需要在 Actions 页面重新启用。
 - 如果飞书机器人设置了 IP 白名单，GitHub Actions 的出口 IP 不固定，不建议使用固定 IP 白名单；如必须使用白名单，建议改用云服务器或云函数并绑定固定出口。
 - 本地 Windows 任务计划器和 GitHub Actions 不建议长期同时开启同一类任务，否则可能重复推送。

@@ -46,6 +46,7 @@ US_REVIEW_SCHEDULE_TIME=06:30
 DAILY_CARD_RETENTION_BONUS=4
 US_MIN_DOLLAR_VOLUME=20000000
 A_MIN_TURNOVER_CNY=100000000
+FEISHU_STRATEGY_WATCHDOG_ENABLED=true
 
 # 主分析任务
 SCHEDULE_ENABLED=true
@@ -137,6 +138,7 @@ python -m venv .venv
 - 复盘会记录保留、新进入和暂时移出的标的。
 - 次日预备名单只用于研究准备；A股 / 美股盘前三次任务会重新计算并确认最终名单。
 - 相同收盘日期和复盘结论不会重复发送。
+- 云端看门狗会在关键窗口内检查当天是否已有成功推送记录；如果 GitHub 定时任务延迟或漏跑，会自动补发一次，已成功推送过则不会重复刷屏。
 
 ## 4. Docker
 
