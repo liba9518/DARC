@@ -42,6 +42,24 @@ NEWSNOW_FIXTURE = {
         },
     ],
 }
+NEWSNOW_IMPORTANT_FILTER_FIXTURE = {
+    "status": "success",
+    "id": "wallstreetcn-quick",
+    "items": [
+        {
+            "id": "1",
+            "title": "美联储释放降息信号，美股科技股盘前走强",
+            "url": "https://news.example.com/important-us",
+            "extra": {"info": "纳斯达克与芯片方向同步升温。"},
+        },
+        {
+            "id": "2",
+            "title": "海外娱乐活动更新",
+            "url": "https://news.example.com/noise",
+            "extra": {"info": "明星活动日程更新。"},
+        },
+    ],
+}
 
 
 class IntelligenceServiceTestCase(unittest.TestCase):
@@ -304,6 +322,28 @@ class IntelligenceServiceTestCase(unittest.TestCase):
         self.assertEqual(items["items"][0]["source_type"], "newsnow")
         self.assertEqual(result["sample_items"][0]["source"], "newsnow-cls")
         self.assertEqual(result["sample_items"][0]["summary"], "Capital market hot topic from NewsNow.")
+
+    def test_newsnow_important_filter_only_saves_market_relevant_items(self) -> None:
+        template = next(
+            item for item in self.service.list_source_templates(market="us", source_type="newsnow")["items"]
+            if item["template_id"] == "newsnow-wallstreetcn-quick-us"
+        )
+        source = self.service.create_source_from_template(template["template_id"], {"enabled": True})
+
+        with patch(
+            "src.services.intelligence_service.requests.get",
+            return_value=self._mock_json_response(
+                payload=NEWSNOW_IMPORTANT_FILTER_FIXTURE,
+                source_url=source["url"],
+            ),
+        ):
+            result = self.service.fetch_source(source["id"])
+
+        self.assertEqual(result["fetched_count"], 1)
+        self.assertEqual(result["saved_count"], 1)
+        items = self.service.list_items(market="us")
+        self.assertEqual(items["total"], 1)
+        self.assertIn("美联储", items["items"][0]["title"])
 
     def test_create_default_sources_is_idempotent(self) -> None:
         first = self.service.create_default_sources({"enabled": False})

@@ -28,6 +28,7 @@ if str(ROOT) not in sys.path:
 from integrations.a_stock_direct import fetch_tencent_quotes
 from integrations.card_language import confidence_text, sanitize_card, stock_display_name
 from integrations.daily_stock_selector import StockPick, select_daily_picks
+from src.services.intelligence_service import IntelligenceService
 from scripts.paper_trading import build_paper_element, rebalance_to_picks
 from scripts.push_strategy_digest import configure_console_encoding, parse_tickers
 
@@ -65,9 +66,11 @@ def build_strategy_card(
     *,
     template: str,
     market_indices: list[dict[str, Any]] | None = None,
+    important_news: list[dict[str, Any]] | None = None,
     errors: list[str] | None = None,
 ) -> dict[str, Any]:
     index_text = format_market_indices(market_indices or [])
+    news_text = format_important_news(important_news or [])
     elements: list[dict[str, Any]] = [
         {
             "tag": "div",
@@ -77,6 +80,7 @@ def build_strategy_card(
                     f"**今日结论：** 以下三只已经通过趋势、强弱和成交活跃度筛选，优先关注。\n"
                     f"**判断方法：** 市场环境 + 多周期趋势 + 相对强度 + 资金链路 + 风险一致性\n"
                     f"**大盘指数：** {index_text}\n"
+                    f"**重要快讯：** {news_text}\n"
                     f"**市场：** {market_label}　**环境：** {picks[0].regime if picks else '未知'}　"
                     f"**生成：** {datetime.now().strftime('%Y-%m-%d %H:%M')}"
                 ),
@@ -242,6 +246,44 @@ def format_market_indices(indices: list[dict[str, Any]]) -> str:
         f"{item['name']} {float(item['price']):.2f}（{float(item.get('pct_change') or 0):+.2f}%）"
         for item in indices[:3]
     )
+
+
+def fetch_important_news(market: str, *, limit: int = 3) -> list[dict[str, Any]]:
+    try:
+        service = IntelligenceService()
+        markets = [market]
+        if market in {"cn", "us"}:
+            markets.append("global")
+        collected: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for selected_market in markets:
+            rows = service.list_items(scope_type="market", market=selected_market, days=2, page=1, page_size=limit)
+            for item in rows.get("items") or []:
+                url = str(item.get("url") or "")
+                title = str(item.get("title") or "").strip()
+                key = url or title
+                if not title or key in seen:
+                    continue
+                seen.add(key)
+                collected.append(item)
+                if len(collected) >= limit:
+                    return collected
+        return collected[:limit]
+    except Exception:
+        return []
+
+
+def format_important_news(items: list[dict[str, Any]]) -> str:
+    if not items:
+        return "暂无新的重要快讯，按既有策略信号执行"
+    titles = []
+    for item in items[:3]:
+        source = str(item.get("source_name") or item.get("source") or "快讯").strip()
+        title = str(item.get("title") or "").strip()
+        if not title:
+            continue
+        titles.append(f"{source}：{title[:48]}")
+    return "；".join(titles) if titles else "暂无新的重要快讯，按既有策略信号执行"
 
 
 def status_on_skip_enabled() -> bool:
@@ -461,6 +503,8 @@ def generate_cards() -> tuple[dict[str, Any], dict[str, Any]]:
     us_picks, a_picks, us_errors, a_errors = generate_selections()
     us_indices = fetch_market_indices("us")
     a_indices = fetch_market_indices("cn")
+    us_news = fetch_important_news("us")
+    a_news = fetch_important_news("cn")
 
     us_card = build_strategy_card(
         f"🇺🇸 美股盘前策略｜精选{count}只",
@@ -468,6 +512,7 @@ def generate_cards() -> tuple[dict[str, Any], dict[str, Any]]:
         us_picks,
         template="blue",
         market_indices=us_indices,
+        important_news=us_news,
         errors=us_errors,
     )
     a_card = build_strategy_card(
@@ -476,6 +521,7 @@ def generate_cards() -> tuple[dict[str, Any], dict[str, Any]]:
         a_picks,
         template="green",
         market_indices=a_indices,
+        important_news=a_news,
         errors=a_errors,
     )
     return us_card, a_card
@@ -490,6 +536,7 @@ def run_once(*, market: str = "both", dry_run: bool = False, force: bool = False
     for selected_market in markets:
         picks, errors = generate_market_selection(selected_market)
         market_indices = fetch_market_indices(selected_market)
+        important_news = fetch_important_news(selected_market)
         picks_by_market[selected_market] = picks
         if selected_market == "us":
             cards[selected_market] = build_strategy_card(
@@ -498,6 +545,7 @@ def run_once(*, market: str = "both", dry_run: bool = False, force: bool = False
                 picks,
                 template="blue",
                 market_indices=market_indices,
+                important_news=important_news,
                 errors=errors,
             )
         else:
@@ -507,6 +555,7 @@ def run_once(*, market: str = "both", dry_run: bool = False, force: bool = False
                 picks,
                 template="green",
                 market_indices=market_indices,
+                important_news=important_news,
                 errors=errors,
             )
     if dry_run:

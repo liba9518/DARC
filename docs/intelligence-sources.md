@@ -5,7 +5,7 @@ Issue #1707 的首版能力聚焦“合规资讯源采集、本地沉淀、可�
 ## 能力范围
 
 - 支持配置 RSS / Atom HTTP(S) 资讯源。
-- 支持 NewsNow HTTP JSON 源，默认内置财联社热门、雪球热门股票、华尔街见闻快讯、金十数据和格隆汇事件等主流财经源。
+- 支持 NewsNow HTTP JSON 源，默认内置财联社热门、雪球热门股票、华尔街见闻快讯、金十数据和格隆汇事件等主流财经源；A股 / 美股策略快讯源会按重要关键词过滤，只沉淀市场相关信息。
 - 支持查询内置 RSS/Atom/NewsNow 模板，并可从模板创建可测试、可启停的资讯源；也可以一键创建全部内置默认源。
 - 保存资讯源配置、启用状态、作用域和最近一次拉取状态。
 - 拉取条目落库到 `intelligence_items`，保存标题、摘要、URL、来源、发布时间、拉取时间、市场与作用域。
@@ -35,9 +35,11 @@ NEWS_INTEL_RETENTION_DAYS=30
 NEWS_INTEL_FETCH_TIMEOUT_SEC=8
 NEWS_INTEL_MAX_ITEMS_PER_SOURCE=50
 NEWSNOW_BASE_URL=https://newsnow.busiyi.world
+IMPORTANT_MARKET_NEWS_MARKETS=cn,us,global
 ```
 
 `NEWSNOW_BASE_URL` 用于拼出 `GET {NEWSNOW_BASE_URL}/api/s?id=<source_id>`。
+`IMPORTANT_MARKET_NEWS_MARKETS` 用于控制云端策略卡自动抓取哪些市场的重要快讯，默认覆盖 A股、美股和全球宏观。
 
 **外部依赖兼容性说明：**
 
@@ -79,13 +81,21 @@ NewsNow 不是 RSS，而是一个聚合热点平台。DSA 直接按 HTTP API 读
 GET {NEWSNOW_BASE_URL}/api/s?id=cls-hot
 ```
 
-本 PR 先接入以下财经相关默认源，保证流程能从“源配置 -> 拉取 -> 落库 -> 分析读取”跑通：
+默认接入以下财经相关源，保证流程能从“源配置 -> 拉取 -> 落库 -> 分析读取”跑通。带“重要过滤关键词”的源会在拉取后按标题和摘要过滤，避免娱乐、社会和泛新闻混入策略卡：
 
 - `cls-hot`：财联社热门，偏 A 股和题材热点。
-- `xueqiu-hotstock`：雪球热门股票，偏个股关注度。
-- `wallstreetcn-quick`：华尔街见闻快讯，偏宏观、商品和市场事件。
-- `jin10`：金十数据，偏全球宏观和外盘事件。
+- `xueqiu-hotstock`：雪球热门股票，偏 A股、港美股个股关注度。
+- `wallstreetcn-quick`：华尔街见闻快讯，分别提供 A股重要过滤版和美股重要过滤版。
+- `jin10`：金十数据，分别提供全球宏观版和美股重要过滤版。
 - `gelonghui`：格隆汇事件，偏港股和中概股上下文。
+
+云端飞书策略工作流会在推送卡片前执行：
+
+```bash
+python scripts/fetch_important_market_news.py
+```
+
+该脚本只启用并拉取带重要关键词过滤的 NewsNow 源；拉取失败时 fail-open，不阻断盘前策略、午间复盘或收盘复盘。
 
 如果需要更多国内平台，可以继续通过 `POST /sources` 手动添加 NewsNow 源，`source_type=newsnow`，`url` 填 `https://<your-newsnow>/api/s?id=<source_id>`。如果更偏好 RSS，也可以用 RSSHub 等合规 RSS 源继续按 `source_type=rss` 接入。
 

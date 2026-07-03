@@ -26,7 +26,9 @@ from scripts.push_daily_strategy_cards import (
     DEFAULT_US_POOL,
     build_status_card,
     fetch_market_indices,
+    fetch_important_news,
     format_market_indices,
+    format_important_news,
     generate_market_selection,
     load_state,
     save_state,
@@ -117,10 +119,19 @@ def build_review_card(
     previous_codes: list[str],
     *,
     market_indices: list[dict[str, Any]] | None = None,
+    important_news: list[dict[str, Any]] | None = None,
     errors: list[str],
+    session: str = "close",
 ) -> dict[str, Any]:
     is_us = market == "us"
-    title = "🇺🇸 美股收盘复盘与次日预案" if is_us else "🇨🇳 A股收盘复盘与次日预案"
+    is_midday = market == "cn" and session == "midday"
+    title = (
+        "🇨🇳 A股午间复盘与下午预案"
+        if is_midday
+        else "🇺🇸 美股收盘复盘与次日预案"
+        if is_us
+        else "🇨🇳 A股收盘复盘与次日预案"
+    )
     template = "indigo" if is_us else "turquoise"
     summary_label, average, wins, total = _summary(results)
     summary_text = (
@@ -129,22 +140,30 @@ def build_review_card(
         else "尚无可比入选价格，本次开始建立跟踪基线"
     )
     index_text = format_market_indices(market_indices or [])
+    news_text = format_important_news(important_news or [])
+    conclusion_label = "午间结论" if is_midday else "复盘结论"
+    stats_label = "上午统计" if is_midday else "当日统计"
+    environment_label = "午间环境" if is_midday else "收盘环境"
+    previous_section = "**上午精选复盘**" if is_midday else "**今日精选复盘**"
+    next_section = "**下午优先关注名单（盘中继续确认）**" if is_midday else "**明日优先关注名单（盘前再次确认）**"
+    current_price_label = "当前" if is_midday else "收盘"
     elements: list[dict[str, Any]] = [
         {
             "tag": "div",
             "text": {
                 "tag": "lark_md",
                 "content": (
-                    f"**复盘结论：** {summary_label}\n"
-                    f"**当日统计：** {summary_text}\n"
+                    f"**{conclusion_label}：** {summary_label}\n"
+                    f"**{stats_label}：** {summary_text}\n"
                     f"**大盘指数：** {index_text}\n"
-                    f"**收盘环境：** {next_picks[0].regime if next_picks else '未知'}　"
+                    f"**重要快讯：** {news_text}\n"
+                    f"**{environment_label}：** {next_picks[0].regime if next_picks else '未知'}　"
                     f"**生成：** {datetime.now().strftime('%Y-%m-%d %H:%M')}"
                 ),
             },
         },
         {"tag": "hr"},
-        {"tag": "div", "text": {"tag": "lark_md", "content": "**今日精选复盘**"}},
+        {"tag": "div", "text": {"tag": "lark_md", "content": previous_section}},
     ]
     for item in results:
         display_name = stock_display_name(item["code"], item["name"])
@@ -159,7 +178,7 @@ def build_review_card(
                     "content": (
                         f"{icon} **{display_name}（{item['code']}）**　"
                         f"策略结果 **{result_text}**\n"
-                        f"收盘 **{item['current_price']:.2f}**　当日 **{item['day_change']:+.2f}%**"
+                        f"{current_price_label} **{item['current_price']:.2f}**　当日 **{item['day_change']:+.2f}%**"
                     ),
                 },
             }
@@ -167,7 +186,7 @@ def build_review_card(
     elements.extend(
         [
             {"tag": "hr"},
-            {"tag": "div", "text": {"tag": "lark_md", "content": "**明日优先关注名单（盘前再次确认）**"}},
+            {"tag": "div", "text": {"tag": "lark_md", "content": next_section}},
         ]
     )
     previous = set(previous_codes)
@@ -207,16 +226,21 @@ def build_review_card(
             }
         )
     data_date = next_picks[0].data_date if next_picks else "无"
+    note_text = (
+        f"午间复盘使用上午盘中数据（{data_date}），下午继续按重点关注名单跟踪。"
+        if is_midday
+        else (
+            f"复盘使用完整收盘数据（{data_date}）。次日预备名单不是最终开盘策略，"
+            "盘前确认通过后直接按重点关注名单推送。"
+        )
+    )
     elements.append(
         {
             "tag": "note",
             "elements": [
                 {
                     "tag": "plain_text",
-                    "content": (
-                        f"复盘使用完整收盘数据（{data_date}）。次日预备名单不是最终开盘策略，"
-                        "盘前确认通过后直接按重点关注名单推送。"
-                    ),
+                    "content": note_text,
                 }
             ],
         }
@@ -245,15 +269,28 @@ def append_paper_review_element(
     elements.insert(insert_at + 1, paper_element)
 
 
-def review_signature(market: str, results: list[dict[str, Any]], next_picks: list[StockPick]) -> str:
+def review_signature(
+    market: str,
+    results: list[dict[str, Any]],
+    next_picks: list[StockPick],
+    *,
+    session: str = "close",
+) -> str:
     data_date = next_picks[0].data_date if next_picks else "none"
-    return "|".join([market, data_date, *(item["code"] for item in results), *(pick.code for pick in next_picks)])
+    return "|".join([market, session, data_date, *(item["code"] for item in results), *(pick.code for pick in next_picks)])
 
 
-def run_once(*, market: str, dry_run: bool = False, force: bool = False) -> None:
+def run_once(*, market: str, dry_run: bool = False, force: bool = False, session: str = "close") -> None:
     load_dotenv(ROOT / ".env")
     state = load_state()
     state_key = "us" if market == "us" else "a"
+    is_midday = market == "cn" and session == "midday"
+    review_name = "午间复盘" if is_midday else "收盘复盘"
+    signature_key = "midday_review_signature" if is_midday else "review_signature"
+    reviewed_at_key = "midday_reviewed_at" if is_midday else "reviewed_at"
+    review_data_date_key = "midday_review_data_date" if is_midday else "review_data_date"
+    preview_codes_key = "midday_next_preview_codes" if is_midday else "next_preview_codes"
+    results_key = "midday_review_results" if is_midday else "review_results"
     previous = state.get(state_key, {})
     previous_codes = list(previous.get("codes") or [])
     previous_picks = list(previous.get("picks") or [])
@@ -264,26 +301,30 @@ def run_once(*, market: str, dry_run: bool = False, force: bool = False) -> None
     results = evaluate_previous(previous_picks, latest)
     next_picks, selection_errors = generate_market_selection(market)
     if not next_picks:
-        print(f"{state_key.upper()} 未生成次日有效名单，跳过本次复盘推送")
+        print(f"{state_key.upper()} 未生成有效名单，跳过本次{review_name}推送")
         if not dry_run and status_on_skip_enabled():
             sent_status = send_status_card_once(
                 state,
                 state_key=state_key,
-                task_key="review_empty",
+                task_key="midday_review_empty" if is_midday else "review_empty",
                 reason="no_next_picks",
                 card=build_status_card(
-                    title="🇨🇳 A股收盘复盘｜运行状态"
-                    if market == "cn"
-                    else "🇺🇸 美股收盘复盘｜运行状态",
+                    title=(
+                        "🇨🇳 A股午间复盘｜运行状态"
+                        if is_midday
+                        else "🇨🇳 A股收盘复盘｜运行状态"
+                        if market == "cn"
+                        else "🇺🇸 美股收盘复盘｜运行状态"
+                    ),
                     market_label="沪深A股" if market == "cn" else "美国股票",
-                    conclusion="云端收盘复盘任务已经正常执行，本次没有生成次日有效名单。",
+                    conclusion=f"云端{review_name}任务已经正常执行，本次没有生成有效名单。",
                     action="不推送空复盘卡，继续保留上一版跟踪名单，等待下一次有效信号。",
                     details=[*quote_errors, *selection_errors] or ["数据源或筛选条件未达到策略门槛"],
                     template="turquoise",
                 ),
             )
             if sent_status:
-                print(f"{state_key.upper()} 收盘复盘状态卡已推送")
+                print(f"{state_key.upper()} {review_name}状态卡已推送")
         return
     errors = [*quote_errors, *selection_errors]
     card = build_review_card(
@@ -292,47 +333,50 @@ def run_once(*, market: str, dry_run: bool = False, force: bool = False) -> None
         next_picks,
         previous_codes,
         market_indices=fetch_market_indices(market),
+        important_news=fetch_important_news(market),
         errors=errors,
+        session=session,
     )
-    signature = review_signature(market, results, next_picks)
+    signature = review_signature(market, results, next_picks, session=session)
 
     if dry_run:
         append_paper_review_element(card, market, latest, dry_run=True)
         print(json.dumps(card, ensure_ascii=False, indent=2))
         return
-    if not force and previous.get("review_signature") == signature:
-        print(f"{state_key.upper()} 收盘数据与复盘结论未变化，跳过重复推送")
+    if not force and previous.get(signature_key) == signature:
+        print(f"{state_key.upper()} {review_name}数据与结论未变化，跳过重复推送")
         return
     append_paper_review_element(card, market, latest, dry_run=False)
     send_card(card)
-    previous["review_signature"] = signature
-    previous["reviewed_at"] = datetime.now().isoformat(timespec="seconds")
-    previous["review_data_date"] = next_picks[0].data_date if next_picks else None
-    previous["next_preview_codes"] = [pick.code for pick in next_picks]
-    previous["review_results"] = results
+    previous[signature_key] = signature
+    previous[reviewed_at_key] = datetime.now().isoformat(timespec="seconds")
+    previous[review_data_date_key] = next_picks[0].data_date if next_picks else None
+    previous[preview_codes_key] = [pick.code for pick in next_picks]
+    previous[results_key] = results
     state[state_key] = previous
     state["updated_at"] = datetime.now().isoformat(timespec="seconds")
     save_state(state)
-    print(f"{state_key.upper()} 收盘复盘与次日预案已推送")
+    print(f"{state_key.upper()} {review_name}与预案已推送")
 
 
 def main() -> int:
     configure_console_encoding()
     parser = argparse.ArgumentParser(description="收盘复盘并生成次日预备策略")
     parser.add_argument("--market", choices=("cn", "us"), required=True)
+    parser.add_argument("--session", choices=("close", "midday"), default="close")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--schedule", action="store_true")
     args = parser.parse_args()
     if not args.schedule:
-        run_once(market=args.market, dry_run=args.dry_run, force=args.force)
+        run_once(market=args.market, dry_run=args.dry_run, force=args.force, session=args.session)
         return 0
 
     load_dotenv(ROOT / ".env")
     a_time = os.getenv("A_REVIEW_SCHEDULE_TIME", "15:20").strip()
     us_time = os.getenv("US_REVIEW_SCHEDULE_TIME", "06:30").strip()
-    schedule.every().day.at(a_time).do(run_once, market="cn", dry_run=args.dry_run, force=args.force)
-    schedule.every().day.at(us_time).do(run_once, market="us", dry_run=args.dry_run, force=args.force)
+    schedule.every().day.at(a_time).do(run_once, market="cn", dry_run=args.dry_run, force=args.force, session="close")
+    schedule.every().day.at(us_time).do(run_once, market="us", dry_run=args.dry_run, force=args.force, session="close")
     print(f"收盘复盘任务已启动：A股 {a_time}，美股 {us_time}")
     while True:
         schedule.run_pending()

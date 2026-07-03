@@ -65,34 +65,87 @@ _BUILTIN_SOURCE_TEMPLATES = [
         "description": "Public market news RSS for global market context. Test before enabling.",
     },
 ]
+_IMPORTANT_KEYWORDS_MARKER = "重要过滤关键词："
+_IMPORTANT_CN_NEWS_KEYWORDS = (
+    "A股", "沪深", "上证", "深成指", "创业板", "科创板", "北向", "主力资金",
+    "成交额", "涨停", "跌停", "券商", "央行", "证监会", "交易所", "监管",
+    "降准", "降息", "利率", "人民币", "政策", "财政", "地产", "消费",
+    "半导体", "芯片", "算力", "人工智能", "机器人", "新能源", "光伏",
+    "锂电", "医药", "军工", "银行", "保险",
+)
+_IMPORTANT_US_NEWS_KEYWORDS = (
+    "美股", "美联储", "降息", "加息", "利率", "通胀", "非农", "美元",
+    "美债", "纳斯达克", "标普", "道琼斯", "科技股", "芯片", "半导体",
+    "人工智能", "算力", "财报", "指引", "盘前", "盘后", "英伟达", "苹果",
+    "微软", "谷歌", "亚马逊", "Meta", "特斯拉", "NVDA", "AAPL", "MSFT",
+    "GOOGL", "AMZN", "META", "TSLA", "AMD", "AVGO",
+)
+
+
+def _important_filter_description(base: str, keywords: tuple[str, ...]) -> str:
+    return f"{base} {_IMPORTANT_KEYWORDS_MARKER}{'、'.join(keywords)}"
+
+
 _NEWSNOW_DEFAULT_SOURCE_DEFS = [
     {
         "template_id": "newsnow-cls-hot",
         "name": "NewsNow 财联社热门",
         "source_id": "cls-hot",
         "market": "cn",
-        "description": "NewsNow 财联社热门财经资讯，适合 A 股大盘和题材热点。",
+        "description": _important_filter_description(
+            "NewsNow 财联社热门财经资讯，适合 A 股大盘和题材热点。",
+            _IMPORTANT_CN_NEWS_KEYWORDS,
+        ),
     },
     {
         "template_id": "newsnow-xueqiu-hotstock",
         "name": "NewsNow 雪球热门股票",
         "source_id": "xueqiu-hotstock",
         "market": "cn",
-        "description": "NewsNow 雪球热门股票，适合捕捉 A 股和港美股散户关注度。",
+        "description": _important_filter_description(
+            "NewsNow 雪球热门股票，适合捕捉 A 股和港美股散户关注度。",
+            (*_IMPORTANT_CN_NEWS_KEYWORDS, *_IMPORTANT_US_NEWS_KEYWORDS),
+        ),
     },
     {
         "template_id": "newsnow-wallstreetcn-quick",
         "name": "NewsNow 华尔街见闻快讯",
         "source_id": "wallstreetcn-quick",
         "market": "cn",
-        "description": "NewsNow 华尔街见闻快讯，适合宏观、商品和市场事件上下文。",
+        "description": _important_filter_description(
+            "NewsNow 华尔街见闻快讯，适合宏观、商品和市场事件上下文。",
+            _IMPORTANT_CN_NEWS_KEYWORDS,
+        ),
+    },
+    {
+        "template_id": "newsnow-wallstreetcn-quick-us",
+        "name": "NewsNow 华尔街见闻快讯（美股重要）",
+        "source_id": "wallstreetcn-quick",
+        "market": "us",
+        "description": _important_filter_description(
+            "NewsNow 华尔街见闻快讯，美股重要快讯过滤版。",
+            _IMPORTANT_US_NEWS_KEYWORDS,
+        ),
     },
     {
         "template_id": "newsnow-jin10",
         "name": "NewsNow 金十数据",
         "source_id": "jin10",
         "market": "global",
-        "description": "NewsNow 金十数据实时财经消息，适合全球宏观和外盘事件。",
+        "description": _important_filter_description(
+            "NewsNow 金十数据实时财经消息，适合全球宏观和外盘事件。",
+            (*_IMPORTANT_CN_NEWS_KEYWORDS, *_IMPORTANT_US_NEWS_KEYWORDS),
+        ),
+    },
+    {
+        "template_id": "newsnow-jin10-us",
+        "name": "NewsNow 金十数据（美股重要）",
+        "source_id": "jin10",
+        "market": "us",
+        "description": _important_filter_description(
+            "NewsNow 金十数据，美股宏观与外盘重要快讯过滤版。",
+            _IMPORTANT_US_NEWS_KEYWORDS,
+        ),
     },
     {
         "template_id": "newsnow-gelonghui",
@@ -387,7 +440,8 @@ class IntelligenceService:
                 content = response.content[: _MAX_FEED_BYTES + 1]
                 if len(content) > _MAX_FEED_BYTES:
                     raise IntelligenceServiceError("feed response is too large")
-            return self._parse_feed(content, source_name=fields["name"], limit=limit)
+            entries = self._parse_feed(content, source_name=fields["name"], limit=max(limit * 3, limit))
+            return self._filter_entries_for_source(fields, entries)[:limit]
         except IntelligenceServiceError:
             raise
         except Exception as exc:
@@ -426,7 +480,8 @@ class IntelligenceService:
                 payload = json.loads(content.decode("utf-8"))
             except (UnicodeDecodeError, json.JSONDecodeError) as exc:
                 raise IntelligenceServiceError(f"invalid NewsNow JSON response: {exc}") from exc
-            return self._parse_newsnow_payload(payload, source_name=fields["name"], limit=limit)
+            entries = self._parse_newsnow_payload(payload, source_name=fields["name"], limit=max(limit * 3, limit))
+            return self._filter_entries_for_source(fields, entries)[:limit]
         except IntelligenceServiceError:
             raise
         except Exception as exc:
@@ -451,6 +506,26 @@ class IntelligenceService:
         if len(content) > _MAX_FEED_BYTES:
             raise IntelligenceServiceError("feed response is too large")
         return content
+
+    def _filter_entries_for_source(self, fields: Dict[str, Any], entries: List[FeedEntry]) -> List[FeedEntry]:
+        keywords = self._important_filter_keywords(fields.get("description"))
+        if not keywords:
+            return entries
+        filtered = []
+        lowered_keywords = [keyword.casefold() for keyword in keywords if keyword]
+        for entry in entries:
+            text = f"{entry.title}\n{entry.summary}".casefold()
+            if any(keyword in text for keyword in lowered_keywords):
+                filtered.append(entry)
+        return filtered
+
+    @staticmethod
+    def _important_filter_keywords(description: Any) -> List[str]:
+        raw = str(description or "")
+        if _IMPORTANT_KEYWORDS_MARKER not in raw:
+            return []
+        _, keyword_text = raw.split(_IMPORTANT_KEYWORDS_MARKER, 1)
+        return [item.strip() for item in re.split(r"[、,，;；\s]+", keyword_text) if item.strip()]
 
     def _get_with_validated_dns(self, raw_url: str, **kwargs: Any) -> requests.Response:
         parsed = urlparse(raw_url)
