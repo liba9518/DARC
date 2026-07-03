@@ -1,0 +1,147 @@
+name: Stock Strategy Watchdog
+
+on:
+  schedule:
+    # UTC cron. The watchdog script decides whether the current Asia/Shanghai
+    # time is inside a critical push window and whether a card is missing.
+    - cron: "*/5 0-1,3,7,12-13,22 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      task:
+        description: "Watchdog task to check"
+        required: true
+        default: "all"
+        type: choice
+        options:
+          - all
+          - cn-preopen
+          - cn-midday-review
+          - cn-review
+          - us-preopen
+          - us-review
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stock-strategy-key-cards
+  cancel-in-progress: false
+
+env:
+  TARGET_REF: stock-strategy-feishu-automation
+
+jobs:
+  watchdog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TZ: Asia/Shanghai
+      PYTHONUNBUFFERED: "1"
+      FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+      FEISHU_WEBHOOK_SECRET: ${{ secrets.FEISHU_WEBHOOK_SECRET || secrets.FEISHU_BOT_SECRET }}
+      FEISHU_WEBHOOK_KEYWORD: ${{ vars.FEISHU_WEBHOOK_KEYWORD || secrets.FEISHU_WEBHOOK_KEYWORD }}
+      FEISHU_STATUS_ON_SKIP: ${{ vars.FEISHU_STATUS_ON_SKIP || 'true' }}
+      FEISHU_STRATEGY_WATCHDOG_ENABLED: ${{ vars.FEISHU_STRATEGY_WATCHDOG_ENABLED || 'true' }}
+      QUIVER_API_TOKEN: ${{ secrets.QUIVER_API_TOKEN }}
+      US_STRATEGY_POOL: ${{ vars.US_STRATEGY_POOL || 'NVDA,MSFT,GOOGL,AMZN,META,AVGO,AMD,ANET,VRT,MU,TSM,PLTR' }}
+      A_STRATEGY_POOL: ${{ vars.A_STRATEGY_POOL || '600519,300750,002594,601138,000063,002475,300308,688041,600276,601318,600036,000333' }}
+      DAILY_CARD_PICK_COUNT: ${{ vars.DAILY_CARD_PICK_COUNT || '3' }}
+      DAILY_CARD_RETENTION_BONUS: ${{ vars.DAILY_CARD_RETENTION_BONUS || '4' }}
+      US_MIN_DOLLAR_VOLUME: ${{ vars.US_MIN_DOLLAR_VOLUME || '20000000' }}
+      A_MIN_TURNOVER_CNY: ${{ vars.A_MIN_TURNOVER_CNY || '100000000' }}
+      PAPER_TRADING_ENABLED: ${{ vars.PAPER_TRADING_ENABLED || 'true' }}
+      PAPER_TRADING_CN_CAPITAL: ${{ vars.PAPER_TRADING_CN_CAPITAL || '10000' }}
+      PAPER_TRADING_US_CAPITAL: ${{ vars.PAPER_TRADING_US_CAPITAL || '10000' }}
+      DATABASE_PATH: data/stock_analysis.db
+      NEWSNOW_BASE_URL: ${{ vars.NEWSNOW_BASE_URL || 'https://newsnow.busiyi.world' }}
+      NEWS_INTEL_RETENTION_DAYS: ${{ vars.NEWS_INTEL_RETENTION_DAYS || '14' }}
+      NEWS_INTEL_FETCH_TIMEOUT_SEC: ${{ vars.NEWS_INTEL_FETCH_TIMEOUT_SEC || '8' }}
+      NEWS_INTEL_MAX_ITEMS_PER_SOURCE: ${{ vars.NEWS_INTEL_MAX_ITEMS_PER_SOURCE || '50' }}
+      IMPORTANT_MARKET_NEWS_MARKETS: ${{ vars.IMPORTANT_MARKET_NEWS_MARKETS || 'cn,us,global' }}
+
+    steps:
+      - name: Checkout automation branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_REF }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Restore daily strategy state
+        uses: actions/cache/restore@v4
+        with:
+          path: data/daily_card_state.json
+          key: stock-strategy-daily-state-watchdog-${{ github.run_id }}
+          restore-keys: |
+            stock-strategy-daily-state-
+            stock-strategy-feishu-state-
+
+      - name: Restore paper trading state
+        uses: actions/cache/restore@v4
+        with:
+          path: data/paper_trade_state.json
+          key: stock-strategy-paper-state-watchdog-${{ github.run_id }}
+          restore-keys: |
+            stock-strategy-paper-state-
+            stock-strategy-daily-state-
+            stock-strategy-feishu-state-
+
+      - name: Prepare runtime directories
+        run: mkdir -p data logs reports
+
+      - name: Fetch important market flash news
+        continue-on-error: true
+        run: python scripts/fetch_important_market_news.py
+
+      - name: Resolve watchdog task
+        id: task
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            task="${{ inputs.task }}"
+          else
+            task="all"
+          fi
+          echo "task=${task}" >> "$GITHUB_OUTPUT"
+
+      - name: Validate Feishu secret
+        shell: bash
+        run: |
+          if [[ -z "${FEISHU_WEBHOOK_URL}" ]]; then
+            echo "::error::Missing repository secret FEISHU_WEBHOOK_URL"
+            exit 1
+          fi
+
+      - name: Run strategy watchdog
+        run: python scripts/push_strategy_watchdog.py --task "${{ steps.task.outputs.task }}"
+
+      - name: Ensure state files exist
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p data
+          test -f data/daily_card_state.json || echo "{}" > data/daily_card_state.json
+          test -f data/paper_trade_state.json || echo "{}" > data/paper_trade_state.json
+
+      - name: Save daily strategy state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: data/daily_card_state.json
+          key: stock-strategy-daily-state-${{ github.run_id }}
+
+      - name: Save paper trading state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: data/paper_trade_state.json
+          key: stock-strategy-paper-state-${{ github.run_id }}
