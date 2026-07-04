@@ -5,7 +5,7 @@
 - 美股：Quiver Quant 官方 API（国会交易、内部人交易、政府合同、场外/暗池、Quiver News）。
 - A股：参考 `simonlin1212/a-stock-data` 的低封禁优先级，使用腾讯财经直连接口获取自选股行情、PE、PB、市值和换手。
 - AI供应链：读取 `wesson9527/chokepoint-atlas` 生成的研究包、赛道评分、候选公司和催化剂。
-- 推送：复用 `FEISHU_WEBHOOK_URL`、签名密钥和关键词。
+- 推送：股票策略云端必须使用 `STOCK_FEISHU_WEBHOOK_URL`、股票签名密钥和关键词；不再回退通用 `FEISHU_WEBHOOK_URL`，避免与世界杯机器人串群。
 - 容错：Quiver 或 A股数据源失败时降级并继续推送。
 
 ## 1. 配置
@@ -21,6 +21,11 @@ OPENAI_BASE_URL=https://your-openai-compatible-endpoint/v1
 OPENAI_MODEL=your_model
 
 # 飞书群自定义机器人
+STOCK_FEISHU_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/your_stock_hook
+# STOCK_FEISHU_WEBHOOK_SECRET=your_stock_signing_secret
+# STOCK_FEISHU_WEBHOOK_KEYWORD=股票日报
+
+# 通用飞书机器人；如果同时部署世界杯等其他机器人，不建议股票策略复用这一组
 FEISHU_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/your_hook
 # FEISHU_WEBHOOK_SECRET=your_signing_secret
 # FEISHU_WEBHOOK_KEYWORD=股票日报
@@ -151,8 +156,8 @@ docker compose -f docker\docker-compose.yml logs -f strategy-digest
 
 在目标群聊中依次打开“群设置 → 群机器人 → 添加机器人 → 自定义机器人”，复制 Webhook URL。
 
-- 开启签名校验：同时填写 `FEISHU_WEBHOOK_SECRET`。
-- 开启关键词：同时填写 `FEISHU_WEBHOOK_KEYWORD`。
+- 开启股票机器人签名校验：优先填写 `STOCK_FEISHU_WEBHOOK_SECRET`。
+- 开启股票机器人关键词：优先填写 `STOCK_FEISHU_WEBHOOK_KEYWORD`。
 - 开启 IP 白名单：将部署机器的出口 IP 加入白名单。
 
 完整 AI 报告也可使用飞书 App Bot；独立策略雷达当前使用群 Webhook，便于低依赖部署。

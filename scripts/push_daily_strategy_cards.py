@@ -156,12 +156,26 @@ def build_strategy_card(
     }
 
 
+def _stock_feishu_config() -> tuple[str, str, str]:
+    stock_webhook = os.getenv("STOCK_FEISHU_WEBHOOK_URL", "").strip()
+    if stock_webhook:
+        return (
+            stock_webhook,
+            os.getenv("STOCK_FEISHU_WEBHOOK_SECRET", "").strip(),
+            os.getenv("STOCK_FEISHU_WEBHOOK_KEYWORD", "").strip(),
+        )
+    return (
+        os.getenv("FEISHU_WEBHOOK_URL", "").strip(),
+        os.getenv("FEISHU_WEBHOOK_SECRET", "").strip(),
+        os.getenv("FEISHU_WEBHOOK_KEYWORD", "").strip(),
+    )
+
+
 def send_card(card: dict[str, Any]) -> None:
-    webhook = os.getenv("FEISHU_WEBHOOK_URL", "").strip()
+    webhook, secret, _keyword = _stock_feishu_config()
     if not webhook:
-        raise RuntimeError("未配置 FEISHU_WEBHOOK_URL")
+        raise RuntimeError("未配置 STOCK_FEISHU_WEBHOOK_URL 或 FEISHU_WEBHOOK_URL")
     payload: dict[str, Any] = {"msg_type": "interactive", "card": sanitize_card(card)}
-    secret = os.getenv("FEISHU_WEBHOOK_SECRET", "").strip()
     if secret:
         payload.update(_sign(secret))
     response = requests.post(webhook, json=payload, timeout=30)

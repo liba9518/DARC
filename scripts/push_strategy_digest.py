@@ -233,12 +233,25 @@ def _sign(secret: str) -> dict[str, str]:
     return {"timestamp": timestamp, "sign": signature}
 
 
+def _stock_feishu_config() -> tuple[str, str, str]:
+    stock_webhook = os.getenv("STOCK_FEISHU_WEBHOOK_URL", "").strip()
+    if stock_webhook:
+        return (
+            stock_webhook,
+            os.getenv("STOCK_FEISHU_WEBHOOK_SECRET", "").strip(),
+            os.getenv("STOCK_FEISHU_WEBHOOK_KEYWORD", "").strip(),
+        )
+    return (
+        os.getenv("FEISHU_WEBHOOK_URL", "").strip(),
+        os.getenv("FEISHU_WEBHOOK_SECRET", "").strip(),
+        os.getenv("FEISHU_WEBHOOK_KEYWORD", "").strip(),
+    )
+
+
 def send_feishu(message: str) -> None:
-    webhook = os.getenv("FEISHU_WEBHOOK_URL", "").strip()
+    webhook, secret, keyword = _stock_feishu_config()
     if not webhook:
-        raise RuntimeError("未配置 FEISHU_WEBHOOK_URL")
-    keyword = os.getenv("FEISHU_WEBHOOK_KEYWORD", "").strip()
-    secret = os.getenv("FEISHU_WEBHOOK_SECRET", "").strip()
+        raise RuntimeError("未配置 STOCK_FEISHU_WEBHOOK_URL 或 FEISHU_WEBHOOK_URL")
     content = chinese_visible_text(f"{keyword}\n{message}" if keyword else message)
     payload: dict[str, Any] = {
         "msg_type": "interactive",
