@@ -33,9 +33,12 @@ jobs:
     env:
       TZ: Asia/Shanghai
       PYTHONUNBUFFERED: "1"
-      FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
-      FEISHU_WEBHOOK_SECRET: ${{ secrets.FEISHU_WEBHOOK_SECRET || secrets.FEISHU_BOT_SECRET }}
-      FEISHU_WEBHOOK_KEYWORD: ${{ vars.FEISHU_WEBHOOK_KEYWORD || secrets.FEISHU_WEBHOOK_KEYWORD }}
+      STOCK_FEISHU_WEBHOOK_URL: ${{ secrets.STOCK_FEISHU_WEBHOOK_URL }}
+      STOCK_FEISHU_WEBHOOK_SECRET: ${{ secrets.STOCK_FEISHU_WEBHOOK_SECRET }}
+      STOCK_FEISHU_WEBHOOK_KEYWORD: ${{ vars.STOCK_FEISHU_WEBHOOK_KEYWORD || secrets.STOCK_FEISHU_WEBHOOK_KEYWORD }}
+      FEISHU_WEBHOOK_URL: ${{ secrets.STOCK_FEISHU_WEBHOOK_URL }}
+      FEISHU_WEBHOOK_SECRET: ${{ secrets.STOCK_FEISHU_WEBHOOK_SECRET }}
+      FEISHU_WEBHOOK_KEYWORD: ${{ vars.STOCK_FEISHU_WEBHOOK_KEYWORD || secrets.STOCK_FEISHU_WEBHOOK_KEYWORD }}
       FEISHU_INTRADAY_STATUS_ON_IDLE: ${{ vars.FEISHU_INTRADAY_STATUS_ON_IDLE || 'true' }}
       INTRADAY_MOVE_THRESHOLD: ${{ vars.INTRADAY_MOVE_THRESHOLD || '2.0' }}
       INTRADAY_EXTREME_THRESHOLD: ${{ vars.INTRADAY_EXTREME_THRESHOLD || '3.5' }}
@@ -117,7 +120,7 @@ jobs:
         shell: bash
         run: |
           if [[ -z "${FEISHU_WEBHOOK_URL}" ]]; then
-            echo "::error::Missing repository secret FEISHU_WEBHOOK_URL"
+            echo "::error::Missing repository secret STOCK_FEISHU_WEBHOOK_URL"
             exit 1
           fi
 

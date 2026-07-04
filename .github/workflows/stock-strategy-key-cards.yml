@@ -51,9 +51,12 @@ jobs:
     env:
       TZ: Asia/Shanghai
       PYTHONUNBUFFERED: "1"
-      FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
-      FEISHU_WEBHOOK_SECRET: ${{ secrets.FEISHU_WEBHOOK_SECRET || secrets.FEISHU_BOT_SECRET }}
-      FEISHU_WEBHOOK_KEYWORD: ${{ vars.FEISHU_WEBHOOK_KEYWORD || secrets.FEISHU_WEBHOOK_KEYWORD }}
+      STOCK_FEISHU_WEBHOOK_URL: ${{ secrets.STOCK_FEISHU_WEBHOOK_URL }}
+      STOCK_FEISHU_WEBHOOK_SECRET: ${{ secrets.STOCK_FEISHU_WEBHOOK_SECRET }}
+      STOCK_FEISHU_WEBHOOK_KEYWORD: ${{ vars.STOCK_FEISHU_WEBHOOK_KEYWORD || secrets.STOCK_FEISHU_WEBHOOK_KEYWORD }}
+      FEISHU_WEBHOOK_URL: ${{ secrets.STOCK_FEISHU_WEBHOOK_URL }}
+      FEISHU_WEBHOOK_SECRET: ${{ secrets.STOCK_FEISHU_WEBHOOK_SECRET }}
+      FEISHU_WEBHOOK_KEYWORD: ${{ vars.STOCK_FEISHU_WEBHOOK_KEYWORD || secrets.STOCK_FEISHU_WEBHOOK_KEYWORD }}
       FEISHU_STATUS_ON_SKIP: ${{ vars.FEISHU_STATUS_ON_SKIP || 'true' }}
       QUIVER_API_TOKEN: ${{ secrets.QUIVER_API_TOKEN }}
       US_STRATEGY_POOL: ${{ vars.US_STRATEGY_POOL || 'NVDA,MSFT,GOOGL,AMZN,META,AVGO,AMD,ANET,VRT,MU,TSM,PLTR' }}
@@ -140,7 +143,7 @@ jobs:
         shell: bash
         run: |
           if [[ -z "${FEISHU_WEBHOOK_URL}" ]]; then
-            echo "::error::Missing repository secret FEISHU_WEBHOOK_URL"
+            echo "::error::Missing repository secret STOCK_FEISHU_WEBHOOK_URL"
             exit 1
           fi
 
