@@ -19,6 +19,7 @@ from typing import Any
 from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parents[1]
+SIM_STATE_PATH = ROOT / "data" / "binance_contract_sim_state.json"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -43,6 +44,16 @@ def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
         return default
     try:
         return min(maximum, max(minimum, int(raw_value)))
+    except ValueError:
+        return default
+
+
+def _env_float(name: str, default: float, *, minimum: float, maximum: float) -> float:
+    raw_value = os.getenv(name, "").strip()
+    if not raw_value:
+        return default
+    try:
+        return min(maximum, max(minimum, float(raw_value)))
     except ValueError:
         return default
 
@@ -250,42 +261,308 @@ def _risk_pct(item: BinanceContractSnapshot) -> float:
     return _clamp(item.kline_range_pct * 0.35, 0.8, 3.0)
 
 
-def _trade_plan_lines(item: BinanceContractSnapshot) -> tuple[str, str]:
+def _trade_plan_values(item: BinanceContractSnapshot) -> dict[str, Any] | None:
     base = _plan_base_price(item)
     if base <= 0 or item.contract_signal not in {"long_watch", "short_watch"}:
-        return (
-            "计划：无触发，不提供 Entry / SL / TP。",
-            "失效：等待下一轮扫描重新确认。",
-        )
+        return None
 
     risk_pct = _risk_pct(item)
     entry_band = _clamp(risk_pct * 0.18, 0.15, 0.50)
+    entry_low = base * (1 - entry_band / 100)
+    entry_high = base * (1 + entry_band / 100)
     if item.contract_signal == "long_watch":
-        entry_low = base * (1 - entry_band / 100)
-        entry_high = base * (1 + entry_band / 100)
         stop = base * (1 - risk_pct / 100)
         risk = base - stop
         tp1 = base + risk
         tp2 = base + risk * 2
-        invalidation = "15m 收盘跌破 SL，或主动买入占比跌回 0.50 以下。"
+        invalidation = "15m 收盘跌破止损，或主动买入占比跌回 0.50 以下。"
+        direction = "long"
     else:
-        entry_low = base * (1 - entry_band / 100)
-        entry_high = base * (1 + entry_band / 100)
         stop = base * (1 + risk_pct / 100)
         risk = stop - base
         tp1 = max(0.0, base - risk)
         tp2 = max(0.0, base - risk * 2)
-        invalidation = "15m 收盘突破 SL，或主动买入占比回到 0.50 以上。"
+        invalidation = "15m 收盘突破止损，或主动买入占比回到 0.50 以上。"
+        direction = "short"
+    return {
+        "direction": direction,
+        "base": base,
+        "entry_low": entry_low,
+        "entry_high": entry_high,
+        "stop": stop,
+        "tp1": tp1,
+        "tp2": tp2,
+        "risk_pct": risk_pct,
+        "risk": abs(base - stop),
+        "invalidation": invalidation,
+    }
+
+
+def _trade_plan_lines(item: BinanceContractSnapshot) -> tuple[str, str]:
+    plan = _trade_plan_values(item)
+    if not plan:
+        return (
+            "计划：无触发，不提供参考入场、止损、止盈。",
+            "失效：等待下一轮扫描重新确认。",
+        )
 
     return (
         "计划："
-        f"Entry {_format_price(entry_low)}-{_format_price(entry_high)}；"
-        f"SL {_format_price(stop)}；"
-        f"TP1 {_format_price(tp1)}；"
-        f"TP2 {_format_price(tp2)}；"
+        f"参考入场 {_format_price(plan['entry_low'])}-{_format_price(plan['entry_high'])}；"
+        f"止损 {_format_price(plan['stop'])}；"
+        f"止盈1 {_format_price(plan['tp1'])}；"
+        f"止盈2 {_format_price(plan['tp2'])}；"
         "单笔风险≤账户 0.5%-1%。",
-        f"失效：{invalidation}",
+        f"失效：{plan['invalidation']}",
     )
+
+
+def _sim_order_enabled() -> bool:
+    return _env_flag("BINANCE_SIM_ORDER_ENABLED", "true")
+
+
+def _sim_order_values(item: BinanceContractSnapshot) -> dict[str, Any] | None:
+    plan = _trade_plan_values(item)
+    if not plan:
+        return None
+
+    base = float(plan["base"])
+    risk_per_contract = float(plan["risk"])
+    if risk_per_contract <= 0:
+        return None
+
+    equity = _env_float("BINANCE_SIM_ACCOUNT_EQUITY_USDT", 10_000.0, minimum=100.0, maximum=10_000_000.0)
+    order_risk_pct = _env_float("BINANCE_SIM_ORDER_RISK_PCT", 1.0, minimum=0.1, maximum=5.0)
+    leverage = _env_float("BINANCE_SIM_LEVERAGE", 3.0, minimum=1.0, maximum=20.0)
+    max_margin_pct = _env_float("BINANCE_SIM_MAX_MARGIN_PCT", 30.0, minimum=1.0, maximum=100.0)
+
+    risk_budget = equity * order_risk_pct / 100
+    qty_by_risk = risk_budget / risk_per_contract
+    max_notional = equity * max_margin_pct / 100 * leverage
+    qty_by_margin = max_notional / base
+    quantity = max(0.0, min(qty_by_risk, qty_by_margin))
+    notional = quantity * base
+    margin = notional / leverage if leverage > 0 else notional
+    return {
+        **plan,
+        "entry": base,
+        "quantity": quantity,
+        "notional": notional,
+        "margin": margin,
+        "risk_budget": risk_budget,
+        "leverage": leverage,
+        "direction_label": "做多" if plan["direction"] == "long" else "做空",
+        "capped": qty_by_margin < qty_by_risk,
+    }
+
+
+def _sim_order_line(item: BinanceContractSnapshot) -> str:
+    if not _sim_order_enabled():
+        return "模拟开单：已关闭。"
+    if item.contract_signal not in {"long_watch", "short_watch"}:
+        return "模拟开单：无触发，不模拟开仓。"
+    values = _sim_order_values(item)
+    if not values:
+        return "模拟开单：风险距离无效，跳过。"
+
+    capped = "；已按最大保证金限制缩小仓位" if values["capped"] else ""
+
+    return (
+        f"模拟开单：方向 {values['direction_label']}；开单价 {_format_price(float(values['entry']))}；"
+        f"数量 {_format_price(float(values['quantity']))} 张；名义仓位 {_format_price(float(values['notional']))} USDT；"
+        f"预估保证金 {_format_price(float(values['margin']))} USDT；"
+        f"风险预算 {_format_price(float(values['risk_budget']))} USDT；"
+        f"杠杆 {float(values['leverage']):g}x{capped}。"
+    )
+
+
+def _load_sim_state() -> dict[str, Any]:
+    try:
+        state = json.loads(SIM_STATE_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        state = {}
+    state.setdefault("orders", [])
+    return state
+
+
+def _save_sim_state(state: dict[str, Any]) -> None:
+    SIM_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temporary = SIM_STATE_PATH.with_suffix(".tmp")
+    temporary.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary.replace(SIM_STATE_PATH)
+
+
+def _current_price(item: BinanceContractSnapshot) -> float:
+    return item.mark_price or item.last_price or item.index_price
+
+
+def _close_sim_order(order: dict[str, Any], *, price: float, reason: str, result: str, at: str) -> dict[str, Any]:
+    entry = float(order.get("entry") or 0)
+    quantity = float(order.get("quantity") or 0)
+    direction = str(order.get("direction") or "")
+    pnl = (entry - price) * quantity if direction == "short" else (price - entry) * quantity
+    order.update(
+        {
+            "status": "closed",
+            "closed_at": at,
+            "close_price": round(price, 6),
+            "close_reason": reason,
+            "result": result,
+            "pnl": round(pnl, 4),
+            "pnl_pct": round((pnl / float(order.get("notional") or 1)) * 100, 4),
+        }
+    )
+    return order
+
+
+def _maybe_close_order(order: dict[str, Any], snapshot: BinanceContractSnapshot, *, at: str) -> dict[str, Any] | None:
+    if order.get("status") != "open":
+        return None
+    price = _current_price(snapshot)
+    if price <= 0:
+        return None
+    direction = str(order.get("direction") or "")
+    stop = float(order.get("stop") or 0)
+    tp1 = float(order.get("tp1") or 0)
+    tp2 = float(order.get("tp2") or 0)
+    if direction == "long":
+        if tp2 > 0 and price >= tp2:
+            return _close_sim_order(order, price=price, reason="止盈2", result="win", at=at)
+        if tp1 > 0 and price >= tp1:
+            return _close_sim_order(order, price=price, reason="止盈1", result="win", at=at)
+        if stop > 0 and price <= stop:
+            return _close_sim_order(order, price=price, reason="止损", result="loss", at=at)
+    if direction == "short":
+        if tp2 > 0 and price <= tp2:
+            return _close_sim_order(order, price=price, reason="止盈2", result="win", at=at)
+        if tp1 > 0 and price <= tp1:
+            return _close_sim_order(order, price=price, reason="止盈1", result="win", at=at)
+        if stop > 0 and price >= stop:
+            return _close_sim_order(order, price=price, reason="止损", result="loss", at=at)
+    return None
+
+
+def _sim_stats(state: dict[str, Any]) -> dict[str, Any]:
+    orders = list(state.get("orders") or [])
+    closed = [order for order in orders if order.get("status") == "closed"]
+    wins = [order for order in closed if order.get("result") == "win"]
+    losses = [order for order in closed if order.get("result") == "loss"]
+    open_orders = [order for order in orders if order.get("status") == "open"]
+    total_pnl = sum(float(order.get("pnl") or 0) for order in closed)
+    closed_count = len(closed)
+    return {
+        "total_orders": len(orders),
+        "open_count": len(open_orders),
+        "closed_count": closed_count,
+        "wins": len(wins),
+        "losses": len(losses),
+        "win_rate": round(len(wins) / closed_count * 100, 2) if closed_count else 0.0,
+        "total_pnl": round(total_pnl, 4),
+    }
+
+
+def _sim_order_record(item: BinanceContractSnapshot, *, at: str) -> dict[str, Any] | None:
+    values = _sim_order_values(item)
+    if not values:
+        return None
+    return {
+        "id": f"{at}-{item.symbol}-{values['direction']}",
+        "status": "open",
+        "opened_at": at,
+        "symbol": item.symbol,
+        "direction": values["direction"],
+        "direction_label": values["direction_label"],
+        "entry": round(float(values["entry"]), 6),
+        "entry_low": round(float(values["entry_low"]), 6),
+        "entry_high": round(float(values["entry_high"]), 6),
+        "stop": round(float(values["stop"]), 6),
+        "tp1": round(float(values["tp1"]), 6),
+        "tp2": round(float(values["tp2"]), 6),
+        "quantity": round(float(values["quantity"]), 6),
+        "notional": round(float(values["notional"]), 4),
+        "margin": round(float(values["margin"]), 4),
+        "risk_budget": round(float(values["risk_budget"]), 4),
+        "leverage": float(values["leverage"]),
+        "signal_score": item.signal_score,
+    }
+
+
+def _update_sim_orders(
+    *,
+    snapshots: list[BinanceContractSnapshot],
+    signals: list[BinanceContractSnapshot],
+    dry_run: bool,
+) -> dict[str, Any]:
+    if not _sim_order_enabled():
+        return {"enabled": False, "events": [], "stats": _sim_stats({"orders": []})}
+    state = _load_sim_state()
+    events: list[dict[str, Any]] = []
+    at = datetime.now().isoformat(timespec="seconds")
+    by_symbol = {snapshot.symbol: snapshot for snapshot in snapshots}
+
+    for order in state.get("orders", []):
+        snapshot = by_symbol.get(str(order.get("symbol") or ""))
+        if not snapshot:
+            continue
+        before_status = order.get("status")
+        closed = _maybe_close_order(order, snapshot, at=at)
+        if closed and before_status != "closed":
+            events.append({"type": "close", "order": dict(closed)})
+
+    open_keys = {
+        (str(order.get("symbol")), str(order.get("direction")))
+        for order in state.get("orders", [])
+        if order.get("status") == "open"
+    }
+    for item in signals:
+        order = _sim_order_record(item, at=at)
+        if not order:
+            continue
+        key = (str(order["symbol"]), str(order["direction"]))
+        if key in open_keys:
+            continue
+        state.setdefault("orders", []).append(order)
+        open_keys.add(key)
+        events.append({"type": "open", "order": dict(order)})
+
+    state["orders"] = list(state.get("orders") or [])[-300:]
+    state["updated_at"] = at
+    if not dry_run:
+        _save_sim_state(state)
+    return {"enabled": True, "events": events, "stats": _sim_stats(state)}
+
+
+def _sim_stats_line(simulation: dict[str, Any] | None) -> str:
+    if not simulation or not simulation.get("enabled"):
+        return "模拟胜率：模拟开单已关闭。"
+    stats = simulation.get("stats") or {}
+    closed_count = int(stats.get("closed_count") or 0)
+    if closed_count <= 0:
+        return f"模拟胜率：暂无已平仓样本；当前持仓 {int(stats.get('open_count') or 0)} 笔。"
+    return (
+        f"模拟胜率：已平 {closed_count} 笔；胜 {int(stats.get('wins') or 0)} / "
+        f"负 {int(stats.get('losses') or 0)}；胜率 {float(stats.get('win_rate') or 0):.2f}%；"
+        f"累计盈亏 {_format_price(float(stats.get('total_pnl') or 0))} USDT；"
+        f"当前持仓 {int(stats.get('open_count') or 0)} 笔。"
+    )
+
+
+def _sim_events_line(simulation: dict[str, Any] | None) -> str:
+    events = list((simulation or {}).get("events") or [])
+    if not events:
+        return "模拟变动：本轮无新开仓/平仓。"
+    parts: list[str] = []
+    for event in events[-5:]:
+        order = event.get("order") or {}
+        symbol = order.get("symbol")
+        if event.get("type") == "open":
+            parts.append(f"开仓 {symbol} {order.get('direction_label')} @ {_format_price(float(order.get('entry') or 0))}")
+        if event.get("type") == "close":
+            parts.append(
+                f"平仓 {symbol} {order.get('close_reason')} @ {_format_price(float(order.get('close_price') or 0))} "
+                f"({order.get('result')}, PnL {_format_price(float(order.get('pnl') or 0))})"
+            )
+    return "模拟变动：" + "；".join(parts) + "。"
 
 
 def build_contract_signal_card(
@@ -296,6 +573,7 @@ def build_contract_signal_card(
     interval: str,
     limit: int,
     side: str,
+    simulation: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a Feishu card with conservative lark_md formatting.
 
@@ -325,7 +603,9 @@ def build_contract_signal_card(
                 "content": (
                     f"**结论：** {conclusion}\n"
                     f"**筛选：** 只扫描 Binance 股票代币合约；{_side_label(side)}；按价格动量、分数阈值、主动买卖结构判断。\n"
-                    f"**周期：** {interval} × {limit} 根K线　**生成：** {now_text}"
+                    f"**周期：** {interval} × {limit} 根K线　**生成：** {now_text}\n"
+                    f"**{_sim_stats_line(simulation)}**\n"
+                    f"{_sim_events_line(simulation)}"
                 ),
             },
         },
@@ -344,6 +624,7 @@ def build_contract_signal_card(
     for index, item in enumerate(rows, start=1):
         label = _signal_label(item.contract_signal)
         plan_line, invalidation_line = _trade_plan_lines(item)
+        sim_order_line = _sim_order_line(item)
         elements.append(
             {
                 "tag": "div",
@@ -353,6 +634,7 @@ def build_contract_signal_card(
                         f"**{index}. 合约：{item.symbol}**\n"
                         f"状态：**{label}**　评分：**{item.signal_score:+.2f}**\n"
                         f"{plan_line}\n"
+                        f"{sim_order_line}\n"
                         f"{invalidation_line}\n"
                         f"最新：**{item.last_price:g}**　标记：**{item.mark_price:g}**　指数：**{item.index_price:g}**\n"
                         f"24h：**{_pct(item.price_change_pct_24h)}**　短周期：**{_pct(item.kline_return_pct)}**　"
@@ -428,6 +710,7 @@ def run(
     signals = signal_candidates(snapshots, side=side, min_score=min_score)
     longs = [item for item in signals if item.contract_signal == "long_watch"]
     shorts = [item for item in signals if item.contract_signal == "short_watch"]
+    simulation = _update_sim_orders(snapshots=snapshots, signals=signals, dry_run=dry_run)
     card = build_contract_signal_card(
         signals,
         all_snapshots=snapshots,
@@ -435,6 +718,7 @@ def run(
         interval=interval,
         limit=limit,
         side=side,
+        simulation=simulation,
     )
     result = {
         "long_count": len(longs),
@@ -445,11 +729,13 @@ def run(
         "longs": [item.symbol for item in longs],
         "shorts": [item.symbol for item in shorts],
         "signals": [item.symbol for item in signals],
+        "simulation": simulation,
         "card": card,
     }
     if dry_run:
         return result
-    if signals or push_empty:
+    sim_events = list(simulation.get("events") or [])
+    if signals or push_empty or sim_events:
         send_card(card)
         result["pushed"] = True
     else:

@@ -1,3 +1,7 @@
+import json
+
+import pytest
+
 from scripts.fetch_binance_contract_data import (
     BinanceContractSnapshot,
     classify_contract_signal,
@@ -8,6 +12,11 @@ from scripts.fetch_binance_contract_data import (
 import scripts.fetch_binance_contract_data as contract_data
 import scripts.push_binance_long_signals as long_signals
 from scripts.push_binance_long_signals import build_long_signal_card, long_candidates, signal_candidates
+
+
+@pytest.fixture(autouse=True)
+def isolate_binance_sim_state(tmp_path, monkeypatch):
+    monkeypatch.setattr(long_signals, "SIM_STATE_PATH", tmp_path / "binance_contract_sim_state.json")
 
 
 def test_contract_symbols_defaults_to_stock_perp_pool(monkeypatch):
@@ -108,13 +117,20 @@ def test_classify_contract_signal_detects_long_and_short_watch():
     assert neutral_signal == "neutral"
 
 
-def _snapshot(symbol: str, signal: str, score: float) -> BinanceContractSnapshot:
+def _snapshot(
+    symbol: str,
+    signal: str,
+    score: float,
+    *,
+    price: float = 100,
+    kline_range_pct: float = 3.0,
+) -> BinanceContractSnapshot:
     return BinanceContractSnapshot(
         symbol=symbol,
         market="usdm",
-        last_price=100,
-        mark_price=100,
-        index_price=100,
+        last_price=price,
+        mark_price=price,
+        index_price=price,
         price_change_pct_24h=2,
         high_price_24h=110,
         low_price_24h=90,
@@ -124,7 +140,7 @@ def _snapshot(symbol: str, signal: str, score: float) -> BinanceContractSnapshot
         next_funding_time="2026-01-01T00:00:00+00:00",
         kline_interval="15m",
         kline_return_pct=1.2,
-        kline_range_pct=3.0,
+        kline_range_pct=kline_range_pct,
         taker_buy_quote_ratio=0.55,
         contract_signal=signal,
         signal_score=score,
@@ -177,10 +193,14 @@ def test_contract_signal_card_includes_trade_plan_for_long_and_short():
 
     assert "TSLAUSDT" in text
     assert "AAPLUSDT" in text
-    assert "Entry" in text
-    assert "SL" in text
-    assert "TP1" in text
-    assert "TP2" in text
+    assert "参考入场" in text
+    assert "止损" in text
+    assert "止盈1" in text
+    assert "止盈2" in text
+    assert "模拟开单" in text
+    assert "方向 做多" in text
+    assert "方向 做空" in text
+    assert "预估保证金" in text
     assert "0.5%-1%" in text
 
 
@@ -197,7 +217,8 @@ def test_contract_signal_card_does_not_show_entry_plan_for_neutral():
 
     assert "NVDAUSDT" in text
     assert "无触发" in text or "鏈Е鍙" in text
-    assert "不提供 Entry / SL / TP" in text
+    assert "不提供参考入场、止损、止盈" in text
+    assert "不模拟开仓" in text
 
 
 def test_build_long_signal_card_marks_empty_status():
@@ -264,6 +285,86 @@ def test_run_pushes_short_signal_when_side_allows(monkeypatch):
     assert result["short_count"] == 1
     assert result["pushed"] is True
     assert len(sent_cards) == 1
+
+
+def test_run_opens_simulated_order_only_when_signal_triggers(monkeypatch):
+    sent_cards = []
+    monkeypatch.setattr(
+        long_signals,
+        "fetch_contract_snapshots",
+        lambda *args, **kwargs: ([_snapshot("TSLAUSDT", "long_watch", 3.0)], []),
+    )
+    monkeypatch.setattr(long_signals, "send_card", lambda card: sent_cards.append(card))
+
+    result = long_signals.run(
+        market="usdm",
+        symbols="TSLAUSDT",
+        interval="15m",
+        limit=96,
+        timeout=10,
+        side="both",
+        min_score=0,
+        dry_run=False,
+        push_empty=False,
+    )
+
+    state = json.loads(long_signals.SIM_STATE_PATH.read_text(encoding="utf-8"))
+    assert result["simulation"]["stats"]["open_count"] == 1
+    assert state["orders"][0]["symbol"] == "TSLAUSDT"
+    assert state["orders"][0]["status"] == "open"
+    assert sent_cards
+
+
+def test_simulated_order_closes_on_take_profit_and_updates_win_rate():
+    open_result = long_signals._update_sim_orders(
+        snapshots=[_snapshot("TSLAUSDT", "long_watch", 3.0, price=100, kline_range_pct=3.0)],
+        signals=[_snapshot("TSLAUSDT", "long_watch", 3.0, price=100, kline_range_pct=3.0)],
+        dry_run=False,
+    )
+    assert open_result["stats"]["open_count"] == 1
+
+    close_result = long_signals._update_sim_orders(
+        snapshots=[_snapshot("TSLAUSDT", "neutral", 0.0, price=102.2, kline_range_pct=3.0)],
+        signals=[],
+        dry_run=False,
+    )
+    assert close_result["stats"]["open_count"] == 0
+    assert close_result["stats"]["closed_count"] == 1
+    assert close_result["stats"]["wins"] == 1
+    assert close_result["stats"]["win_rate"] == 100.0
+    assert close_result["events"][0]["type"] == "close"
+
+
+def test_run_pushes_card_when_simulated_order_closes_without_new_signal(monkeypatch):
+    long_signals._update_sim_orders(
+        snapshots=[_snapshot("TSLAUSDT", "long_watch", 3.0, price=100, kline_range_pct=3.0)],
+        signals=[_snapshot("TSLAUSDT", "long_watch", 3.0, price=100, kline_range_pct=3.0)],
+        dry_run=False,
+    )
+    sent_cards = []
+    monkeypatch.setattr(
+        long_signals,
+        "fetch_contract_snapshots",
+        lambda *args, **kwargs: ([_snapshot("TSLAUSDT", "neutral", 0.0, price=102.2, kline_range_pct=3.0)], []),
+    )
+    monkeypatch.setattr(long_signals, "send_card", lambda card: sent_cards.append(card))
+
+    result = long_signals.run(
+        market="usdm",
+        symbols="TSLAUSDT",
+        interval="15m",
+        limit=96,
+        timeout=10,
+        side="both",
+        min_score=0,
+        dry_run=False,
+        push_empty=False,
+    )
+
+    assert result["signal_count"] == 0
+    assert result["simulation"]["stats"]["closed_count"] == 1
+    assert result["pushed"] is True
+    assert sent_cards
 
 
 def test_run_side_short_excludes_long_candidates_from_result(monkeypatch):

@@ -59,6 +59,11 @@ jobs:
       BINANCE_SIGNAL_MIN_SCORE: ${{ vars.BINANCE_SIGNAL_MIN_SCORE || '0' }}
       BINANCE_PUSH_EMPTY_LONG_STATUS: "false"
       BINANCE_FUTURES_BASE_URL: ${{ vars.BINANCE_FUTURES_BASE_URL || 'https://fapi.binance.com' }}
+      BINANCE_SIM_ORDER_ENABLED: ${{ vars.BINANCE_SIM_ORDER_ENABLED || 'true' }}
+      BINANCE_SIM_ACCOUNT_EQUITY_USDT: ${{ vars.BINANCE_SIM_ACCOUNT_EQUITY_USDT || '10000' }}
+      BINANCE_SIM_ORDER_RISK_PCT: ${{ vars.BINANCE_SIM_ORDER_RISK_PCT || '1' }}
+      BINANCE_SIM_LEVERAGE: ${{ vars.BINANCE_SIM_LEVERAGE || '3' }}
+      BINANCE_SIM_MAX_MARGIN_PCT: ${{ vars.BINANCE_SIM_MAX_MARGIN_PCT || '30' }}
 
     steps:
       - name: Check out repository
@@ -77,6 +82,14 @@ jobs:
 
       - name: Prepare runtime directories
         run: mkdir -p data logs reports
+
+      - name: Restore Binance simulation state
+        uses: actions/cache/restore@v4
+        with:
+          path: data/binance_contract_sim_state.json
+          key: binance-contract-sim-state-${{ github.run_id }}
+          restore-keys: |
+            binance-contract-sim-state-
 
       - name: Verify Feishu webhook secret
         shell: bash
@@ -122,3 +135,10 @@ jobs:
           fi
 
           python "${args[@]}"
+
+      - name: Save Binance simulation state
+        if: always() && hashFiles('data/binance_contract_sim_state.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: data/binance_contract_sim_state.json
+          key: binance-contract-sim-state-${{ github.run_id }}
