@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("cn-preopen", "us-preopen", "cn-review", "us-review", "cn-intraday", "us-intraday")]
+    [ValidateSet("binance-contract", "binance-contract-long", "binance-contract-short")]
     [string]$Mode,
     [switch]$DryRun
 )
@@ -16,14 +16,18 @@ $LogFile = Join-Path $LogDirectory "$Mode.log"
 New-Item -ItemType Directory -Force -Path $LogDirectory | Out-Null
 Set-Location -LiteralPath $ProjectRoot
 
-$arguments = switch ($Mode) {
-    "cn-preopen" { @("scripts\push_daily_strategy_cards.py", "--market", "cn") }
-    "us-preopen" { @("scripts\push_daily_strategy_cards.py", "--market", "us") }
-    "cn-review" { @("scripts\push_post_close_review.py", "--market", "cn") }
-    "us-review" { @("scripts\push_post_close_review.py", "--market", "us") }
-    "cn-intraday" { @("scripts\push_intraday_monitor.py", "--market", "cn") }
-    "us-intraday" { @("scripts\push_intraday_monitor.py", "--market", "us") }
+$side = switch ($Mode) {
+    "binance-contract" { "both" }
+    "binance-contract-long" { "long" }
+    "binance-contract-short" { "short" }
 }
+
+$arguments = @(
+    "scripts\push_binance_long_signals.py",
+    "--side",
+    $side,
+    "--no-push-empty"
+)
 if ($DryRun) {
     $arguments += "--dry-run"
 }

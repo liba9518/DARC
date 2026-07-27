@@ -2,15 +2,37 @@
 
 from __future__ import annotations
 
+import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, time
+from pathlib import Path
 from typing import Iterable
 from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
 import yfinance as yf
+import yfinance.cache as yf_cache
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def configure_yfinance_cache() -> None:
+    """Keep yfinance's sqlite caches in a writable project-local directory."""
+    raw_path = os.getenv("YFINANCE_CACHE_DIR")
+    cache_dir = Path(raw_path).expanduser() if raw_path else ROOT / "data" / "cache" / "yfinance"
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        yf_cache.set_cache_location(str(cache_dir))
+        yf.set_tz_cache_location(str(cache_dir))
+    except Exception:
+        # Cache setup is an optimization; data fetch failures are handled per symbol.
+        return
+
+
+configure_yfinance_cache()
 
 
 @dataclass(frozen=True)
@@ -45,6 +67,14 @@ def to_yahoo_symbol(code: str, market: str) -> str:
     value = code.strip().upper()
     if market == "us":
         return value
+    if market == "kr":
+        if value.endswith((".KS", ".KQ")):
+            return value
+        if value.isdigit() and len(value) == 6:
+            return f"{value}.KS"
+        return value
+    if market == "jp":
+        return value
     if not (value.isdigit() and len(value) == 6):
         return value
     return f"{value}.SS" if value.startswith(("5", "6", "9")) else f"{value}.SZ"
@@ -64,8 +94,18 @@ def trim_incomplete_session(history: pd.DataFrame, market: str) -> pd.DataFrame:
     """Remove today's still-open daily bar when a provider exposes it early."""
     if history is None or history.empty:
         return history
-    timezone = ZoneInfo("America/New_York") if market == "us" else ZoneInfo("Asia/Shanghai")
-    session_close = time(16, 10) if market == "us" else time(15, 10)
+    if market == "us":
+        timezone = ZoneInfo("America/New_York")
+        session_close = time(16, 10)
+    elif market == "kr":
+        timezone = ZoneInfo("Asia/Seoul")
+        session_close = time(15, 40)
+    elif market == "jp":
+        timezone = ZoneInfo("Asia/Tokyo")
+        session_close = time(15, 40)
+    else:
+        timezone = ZoneInfo("Asia/Shanghai")
+        session_close = time(15, 10)
     now = datetime.now(timezone)
     last_timestamp = pd.Timestamp(history.index[-1])
     if last_timestamp.tzinfo is not None:
@@ -106,6 +146,7 @@ def rank_history(
     regime: str = "未知",
     regime_adjustment: float = 0.0,
     minimum_liquidity: float = 0.0,
+    selection_profile: str = "standard",
 ) -> StockPick | None:
     if history is None or len(history) < 81:
         return None
@@ -217,17 +258,28 @@ def rank_history(
         ),
     )
     confidence = "A" if confidence_points >= 8 else "B" if confidence_points >= 6 else "C"
-    eligible = (
-        price >= ma20
-        and ma20 >= ma60
-        and ma20 > ma20_5d_ago
-        and return_20d > 0
-        and relative_strength_20d > -2
-        and rsi14 < 82
-        and liquidity >= minimum_liquidity
-        and capital_trace_score >= (58 if regime == "逆风" else 50)
-        and confidence_points >= (8 if regime == "逆风" else 6)
-    )
+    if selection_profile == "us_contract":
+        eligible = (
+            price >= ma20
+            and return_20d > -3
+            and relative_strength_20d > -5
+            and rsi14 < 86
+            and liquidity >= minimum_liquidity
+            and capital_trace_score >= (52 if regime == "逆风" else 45)
+            and confidence_points >= (7 if regime == "逆风" else 5)
+        )
+    else:
+        eligible = (
+            price >= ma20
+            and ma20 >= ma60
+            and ma20 > ma20_5d_ago
+            and return_20d > 0
+            and relative_strength_20d > -2
+            and rsi14 < 82
+            and liquidity >= minimum_liquidity
+            and capital_trace_score >= (58 if regime == "逆风" else 50)
+            and confidence_points >= (8 if regime == "逆风" else 6)
+        )
 
     reasons = []
     if price >= ma20 and ma20 >= ma60:
@@ -304,6 +356,7 @@ def _download_one(
     regime: str,
     regime_adjustment: float,
     minimum_liquidity: float,
+    selection_profile: str,
 ) -> StockPick | None:
     symbol = to_yahoo_symbol(code, market)
     history = yf.Ticker(symbol).history(period="6mo", interval="1d", auto_adjust=True)
@@ -317,6 +370,7 @@ def _download_one(
         regime=regime,
         regime_adjustment=regime_adjustment,
         minimum_liquidity=minimum_liquidity,
+        selection_profile=selection_profile,
     )
 
 
@@ -325,17 +379,27 @@ def select_daily_picks(
     *,
     market: str,
     names: dict[str, str] | None = None,
-    count: int = 3,
+    count: int | None = 3,
     workers: int = 4,
     benchmark_symbol: str | None = None,
     minimum_liquidity: float = 0.0,
     include_reserves: int = 3,
+    selection_profile: str = "standard",
+    eligible_only: bool = False,
 ) -> tuple[list[StockPick], list[str]]:
     normalized = list(dict.fromkeys(code.strip().upper() for code in codes if code.strip()))
     name_map = names or {}
     picks: list[StockPick] = []
     errors: list[str] = []
-    benchmark_code = benchmark_symbol or ("SPY" if market == "us" else "000300.SS")
+    benchmark_code = benchmark_symbol or (
+        "SPY"
+        if market == "us"
+        else "^KS11"
+        if market == "kr"
+        else "^N225"
+        if market == "jp"
+        else "000300.SS"
+    )
     try:
         benchmark_history = yf.Ticker(benchmark_code).history(period="6mo", interval="1d", auto_adjust=True)
         benchmark_history = trim_incomplete_session(benchmark_history, market)
@@ -355,6 +419,7 @@ def select_daily_picks(
                 regime,
                 regime_adjustment,
                 minimum_liquidity,
+                selection_profile,
             ): code
             for code in normalized
         }
@@ -369,4 +434,9 @@ def select_daily_picks(
             except Exception as exc:
                 errors.append(f"{code} 获取失败：{exc}")
     picks.sort(key=lambda item: (-int(item.eligible), -item.score, item.code))
-    return picks[: count + max(0, include_reserves)], errors
+    if eligible_only:
+        picks = [pick for pick in picks if pick.eligible]
+    if count is None or count <= 0:
+        return picks, errors
+    limit = count if eligible_only else count + max(0, include_reserves)
+    return picks[:limit], errors

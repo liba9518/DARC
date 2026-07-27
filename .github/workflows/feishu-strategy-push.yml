@@ -1,40 +1,42 @@
-name: Feishu strategy push
+name: Feishu Binance stock contract signals
 
 on:
   schedule:
-    # All cron values use UTC. The scripts and copy are designed around Asia/Shanghai time.
-    - cron: "10 1 * * 1-5"      # 09:10 Asia/Shanghai, A-share pre-open card
-    - cron: "20 7 * * 1-5"      # 15:20 Asia/Shanghai, A-share post-close review
-    - cron: "10 13 * * 1-5"     # 21:10 Asia/Shanghai, US pre-open card
-    - cron: "30 22 * * 1-5"     # 06:30 Asia/Shanghai next day, US post-close review
-    - cron: "*/15 1-3,5-7 * * 1-5"   # A-share intraday monitor window
-    - cron: "*/15 13-22 * * 1-5"     # US intraday monitor window, covers DST and winter time
+    # Binance TradFi/equity perpetual contracts trade 24/7. The script pushes
+    # only when long/short conditions are triggered, so idle scans do not send
+    # Feishu cards.
+    - cron: "*/15 * * * *"
   workflow_dispatch:
     inputs:
-      task:
-        description: "Task to run"
+      side:
+        description: "Signal side to scan and push"
         required: true
-        default: "all-preopen"
+        default: "both"
         type: choice
         options:
-          - cn-preopen
-          - us-preopen
-          - cn-review
-          - us-review
-          - cn-intraday
-          - us-intraday
-          - all-preopen
-          - all-review
-          - all-intraday
-          - all
-      force:
-        description: "Force pre-open/review push even when the signature is unchanged"
+          - both
+          - long
+          - short
+      market:
+        description: "Binance stock contracts are USDT-M only"
+        required: true
+        default: "usdm"
+        type: choice
+        options:
+          - usdm
+      symbols:
+        description: "Optional comma-separated stock contract symbols, for example TSLAUSDT,AAPLUSDT,NVDAUSDT"
+        required: false
+        default: ""
+        type: string
+      push_empty:
+        description: "Push a status card even when no signal is triggered"
         required: false
         default: false
         type: boolean
 
 concurrency:
-  group: feishu-strategy-push
+  group: feishu-binance-stock-contract-signals
   cancel-in-progress: false
 
 jobs:
@@ -47,17 +49,16 @@ jobs:
       FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
       FEISHU_WEBHOOK_SECRET: ${{ secrets.FEISHU_WEBHOOK_SECRET }}
       FEISHU_WEBHOOK_KEYWORD: ${{ vars.FEISHU_WEBHOOK_KEYWORD || secrets.FEISHU_WEBHOOK_KEYWORD }}
-      QUIVER_API_TOKEN: ${{ secrets.QUIVER_API_TOKEN }}
-      US_STRATEGY_POOL: ${{ vars.US_STRATEGY_POOL || 'NVDA,MSFT,GOOGL,AMZN,META,AVGO,AMD,ANET,VRT,MU,TSM,PLTR' }}
-      A_STRATEGY_POOL: ${{ vars.A_STRATEGY_POOL || '600519,300750,002594,601138,000063,002475,300308,688041,600276,601318,600036,000333' }}
-      DAILY_CARD_PICK_COUNT: ${{ vars.DAILY_CARD_PICK_COUNT || '3' }}
-      DAILY_CARD_RETENTION_BONUS: ${{ vars.DAILY_CARD_RETENTION_BONUS || '4' }}
-      US_MIN_DOLLAR_VOLUME: ${{ vars.US_MIN_DOLLAR_VOLUME || '20000000' }}
-      A_MIN_TURNOVER_CNY: ${{ vars.A_MIN_TURNOVER_CNY || '100000000' }}
-      INTRADAY_MOVE_THRESHOLD: ${{ vars.INTRADAY_MOVE_THRESHOLD || '2.0' }}
-      INTRADAY_EXTREME_THRESHOLD: ${{ vars.INTRADAY_EXTREME_THRESHOLD || '3.5' }}
-      INTRADAY_STEP_THRESHOLD: ${{ vars.INTRADAY_STEP_THRESHOLD || '1.2' }}
-      INTRADAY_COOLDOWN_MINUTES: ${{ vars.INTRADAY_COOLDOWN_MINUTES || '60' }}
+      BINANCE_CONTRACT_MARKET: ${{ vars.BINANCE_CONTRACT_MARKET || 'usdm' }}
+      BINANCE_CONTRACT_SYMBOLS: ${{ vars.BINANCE_CONTRACT_SYMBOLS || 'TSLAUSDT,AAPLUSDT,NVDAUSDT,MSFTUSDT,AMZNUSDT,METAUSDT,GOOGLUSDT,AVGOUSDT,TSMUSDT,AMDUSDT,MUUSDT,SNDKUSDT,MSTRUSDT,COINUSDT,PLTRUSDT,CRCLUSDT,HOODUSDT,BABAUSDT,SPYUSDT,QQQUSDT,EWYUSDT,KORUUSDT,EWJUSDT' }}
+      BINANCE_CONTRACT_STOCK_ONLY: "true"
+      BINANCE_CONTRACT_INTERVAL: ${{ vars.BINANCE_CONTRACT_INTERVAL || '15m' }}
+      BINANCE_CONTRACT_KLINE_LIMIT: ${{ vars.BINANCE_CONTRACT_KLINE_LIMIT || '96' }}
+      BINANCE_CONTRACT_TIMEOUT_SEC: ${{ vars.BINANCE_CONTRACT_TIMEOUT_SEC || '10' }}
+      BINANCE_CONTRACT_SIGNAL_SIDE: ${{ vars.BINANCE_CONTRACT_SIGNAL_SIDE || 'both' }}
+      BINANCE_SIGNAL_MIN_SCORE: ${{ vars.BINANCE_SIGNAL_MIN_SCORE || '0' }}
+      BINANCE_PUSH_EMPTY_LONG_STATUS: "false"
+      BINANCE_FUTURES_BASE_URL: ${{ vars.BINANCE_FUTURES_BASE_URL || 'https://fapi.binance.com' }}
 
     steps:
       - name: Check out repository
@@ -74,40 +75,8 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
-      - name: Restore strategy state
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            data/daily_card_state.json
-            data/intraday_alert_state.json
-          key: feishu-strategy-state-${{ github.run_id }}
-          restore-keys: |
-            feishu-strategy-state-
-
       - name: Prepare runtime directories
         run: mkdir -p data logs reports
-
-      - name: Resolve task
-        id: task
-        shell: bash
-        run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            task="${{ inputs.task }}"
-            force="${{ inputs.force }}"
-          else
-            force="false"
-            case "${{ github.event.schedule }}" in
-              "10 1 * * 1-5") task="cn-preopen" ;;
-              "20 7 * * 1-5") task="cn-review" ;;
-              "10 13 * * 1-5") task="us-preopen" ;;
-              "30 22 * * 1-5") task="us-review" ;;
-              "*/15 1-3,5-7 * * 1-5") task="cn-intraday" ;;
-              "*/15 13-22 * * 1-5") task="us-intraday" ;;
-              *) echo "Unknown schedule: ${{ github.event.schedule }}" >&2; exit 1 ;;
-            esac
-          fi
-          echo "task=${task}" >> "$GITHUB_OUTPUT"
-          echo "force=${force}" >> "$GITHUB_OUTPUT"
 
       - name: Verify Feishu webhook secret
         shell: bash
@@ -117,67 +86,39 @@ jobs:
             exit 1
           fi
 
-      - name: Push strategy cards
+      - name: Push Binance stock contract signals
         shell: bash
         run: |
           set -euo pipefail
 
-          force_args=()
-          if [[ "${{ steps.task.outputs.force }}" == "true" ]]; then
-            force_args=(--force)
+          market="${BINANCE_CONTRACT_MARKET}"
+          side="${BINANCE_CONTRACT_SIGNAL_SIDE}"
+          symbols="${BINANCE_CONTRACT_SYMBOLS}"
+          push_empty="false"
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            market="${{ inputs.market }}"
+            side="${{ inputs.side }}"
+            symbols="${{ inputs.symbols }}"
+            push_empty="${{ inputs.push_empty }}"
           fi
 
-          run_task() {
-            case "$1" in
-              cn-preopen) python scripts/push_daily_strategy_cards.py --market cn "${force_args[@]}" ;;
-              us-preopen) python scripts/push_daily_strategy_cards.py --market us "${force_args[@]}" ;;
-              cn-review) python scripts/push_post_close_review.py --market cn "${force_args[@]}" ;;
-              us-review) python scripts/push_post_close_review.py --market us "${force_args[@]}" ;;
-              cn-intraday) python scripts/push_intraday_monitor.py --market cn ;;
-              us-intraday) python scripts/push_intraday_monitor.py --market us ;;
-              *) echo "Unsupported task: $1" >&2; exit 1 ;;
-            esac
-          }
+          args=(
+            scripts/push_binance_long_signals.py
+            --market "$market"
+            --side "$side"
+            --interval "${BINANCE_CONTRACT_INTERVAL}"
+            --limit "${BINANCE_CONTRACT_KLINE_LIMIT}"
+            --timeout "${BINANCE_CONTRACT_TIMEOUT_SEC}"
+            --min-score "${BINANCE_SIGNAL_MIN_SCORE}"
+            --no-push-empty
+          )
 
-          case "${{ steps.task.outputs.task }}" in
-            all-preopen)
-              run_task cn-preopen
-              run_task us-preopen
-              ;;
-            all-review)
-              run_task cn-review
-              run_task us-review
-              ;;
-            all-intraday)
-              run_task cn-intraday
-              run_task us-intraday
-              ;;
-            all)
-              run_task cn-preopen
-              run_task us-preopen
-              run_task cn-review
-              run_task us-review
-              run_task cn-intraday
-              run_task us-intraday
-              ;;
-            *)
-              run_task "${{ steps.task.outputs.task }}"
-              ;;
-          esac
+          if [[ -n "${symbols}" ]]; then
+            args+=(--symbols "${symbols}")
+          fi
+          if [[ "${push_empty}" == "true" ]]; then
+            args+=(--push-empty)
+          fi
 
-      - name: Ensure state files exist
-        if: always()
-        shell: bash
-        run: |
-          mkdir -p data
-          test -f data/daily_card_state.json || echo "{}" > data/daily_card_state.json
-          test -f data/intraday_alert_state.json || echo "{}" > data/intraday_alert_state.json
-
-      - name: Save strategy state
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            data/daily_card_state.json
-            data/intraday_alert_state.json
-          key: feishu-strategy-state-${{ github.run_id }}
+          python "${args[@]}"

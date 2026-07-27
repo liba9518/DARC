@@ -55,6 +55,8 @@ def save_paper_state(state: dict[str, Any]) -> None:
 def _market_config(market: str) -> tuple[str, float, str]:
     if market == "us":
         return "美股", float(os.getenv("PAPER_TRADING_US_CAPITAL", "10000")), "美元"
+    if market == "kr":
+        return "韩股", float(os.getenv("PAPER_TRADING_KR_CAPITAL", "10000000")), "韩元"
     return "A股", float(os.getenv("PAPER_TRADING_CN_CAPITAL", "10000")), "人民币"
 
 

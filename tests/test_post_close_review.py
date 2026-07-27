@@ -2,6 +2,7 @@ import re
 
 from integrations.card_language import sanitize_card, visible_card_text
 from integrations.daily_stock_selector import rank_history
+import scripts.push_post_close_review as post_close_review
 from scripts.push_post_close_review import build_review_card, evaluate_previous
 from tests.test_daily_strategy_cards import _history
 
@@ -12,6 +13,16 @@ def test_evaluate_previous_calculates_strategy_performance():
         {"AAA": {"price": 103, "day_change": 2, "name": "Alpha"}},
     )
     assert results[0]["performance"] == 3
+
+
+def test_post_close_review_disabled_by_default(monkeypatch):
+    called = []
+    monkeypatch.delenv("FEISHU_STOCK_CARDS_ENABLED", raising=False)
+    monkeypatch.setattr(post_close_review, "load_state", lambda: called.append("load_state"))
+
+    post_close_review.run_once(market="us")
+
+    assert called == []
 
 
 def test_review_card_contains_results_and_next_preview():

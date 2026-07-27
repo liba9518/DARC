@@ -15,21 +15,19 @@
 
 启用后会自动执行：
 
-- A股盘前策略：周一到周五 09:00、09:10、09:20，北京时间三次补跑，全部在 09:30 开盘前完成。
-- A股午间复盘：周一到周五 11:45，北京时间一次复盘上午表现并给出下午预案。
-- A股收盘复盘：周一到周五 15:20、15:30、15:40，北京时间三次补跑。
+- 韩股盘前策略：周一到周五 07:40，北京时间一次推送，对应韩国开盘前约 20 分钟。
+- 韩股收盘复盘：周一到周五 14:50，北京时间一次复盘，对应韩国收盘后约 20 分钟。
 - 美股盘前策略：周一到周五 20:50、21:10、21:25，北京时间三次补跑，确保尽量在 21:30 开盘前送达。
 - 美股收盘复盘：北京时间周二到周六 06:30、06:40、06:50，对应美股周一到周五收盘后三次补跑。
-- A股盘中监控：交易时段窗口内每 30 分钟检查一次，只在达到异动门槛时推送。
 - 美股盘中监控：覆盖夏令时和冬令时交易窗口，每 30 分钟检查一次，只在达到异动门槛时推送。
 
 关键卡片补跑不会重复发送同一份名单：脚本会根据市场、行情日期和股票名单生成签名，已推送过的内容会自动跳过。
 
-盘前策略卡和收盘复盘卡会展示对应市场的大盘指数价格：A股展示上证指数、深证成指、创业板指；美股展示标普五百、纳斯达克、道琼斯。指数获取失败不会阻断精选股票推送。
+盘前策略卡和收盘复盘卡会展示对应市场的大盘指数价格：韩股展示 KOSPI、KOSDAQ；美股展示标普五百、纳斯达克、道琼斯。指数获取失败不会阻断精选股票推送。
 
-云端推送前会自动抓取 A股 / 美股相关的重要快讯，只保留命中市场、宏观、指数、监管、财报、芯片、人工智能等关键词的信息。快讯源失败时不会阻断策略卡推送；卡片会显示“暂无新的重要快讯，按既有策略信号执行”。
+云端推送前会自动抓取韩股 / 美股相关的重要快讯，只保留命中市场、宏观、指数、监管、财报、芯片、人工智能等关键词的信息。快讯源失败时不会阻断策略卡推送；卡片会显示“暂无新的重要快讯，按既有策略信号执行”。
 
-关键卡片看门狗会在盘前、午间复盘、收盘复盘等关键窗口内重复检查状态缓存：如果发现当天应该推送但状态里还没有成功记录，会自动强制补发一次；如果已经推送过，则只记录“无需补发”，不会重复刷屏。看门狗与关键卡片工作流共用并发锁，避免两个工作流同时推送同一类卡片。
+关键卡片看门狗会在盘前、收盘复盘等关键窗口内重复检查状态缓存：如果发现当天应该推送但状态里还没有成功记录，会自动强制补发一次；如果已经推送过，则只记录“无需补发”，不会重复刷屏。看门狗与关键卡片工作流共用并发锁，避免两个工作流同时推送同一类卡片。
 
 ## 2. 必填密钥
 
@@ -75,11 +73,12 @@ Settings -> Secrets and variables -> Actions -> Variables
 
 ```text
 US_STRATEGY_POOL
-A_STRATEGY_POOL
-DAILY_CARD_PICK_COUNT
+KR_STRATEGY_POOL
+US_DAILY_CARD_PICK_COUNT
+KR_DAILY_CARD_PICK_COUNT
 DAILY_CARD_RETENTION_BONUS
 US_MIN_DOLLAR_VOLUME
-A_MIN_TURNOVER_CNY
+KR_MIN_DAILY_TURNOVER_KRW
 INTRADAY_MOVE_THRESHOLD
 INTRADAY_EXTREME_THRESHOLD
 INTRADAY_STEP_THRESHOLD
@@ -90,7 +89,7 @@ FEISHU_INTRADAY_STATUS_ON_IDLE
 FEISHU_WEBHOOK_KEYWORD
 STOCK_FEISHU_WEBHOOK_KEYWORD
 PAPER_TRADING_ENABLED
-PAPER_TRADING_CN_CAPITAL
+PAPER_TRADING_KR_CAPITAL
 PAPER_TRADING_US_CAPITAL
 PAPER_TRADING_RISK_CONTROL_ENABLED
 PAPER_TRADING_STOP_LOSS_PCT
@@ -99,7 +98,7 @@ PAPER_TRADING_TRAILING_TAKE_PROFIT_DRAWDOWN_PCT
 PAPER_TRADING_TRAILING_TAKE_PROFIT_ARM_PCT
 ```
 
-不配置时，工作流会使用仓库内置默认值。
+不配置时，工作流会使用仓库内置默认值。`US_DAILY_CARD_PICK_COUNT`、`KR_DAILY_CARD_PICK_COUNT` 配置为 `0` 时表示不固定推荐数量，只推送满足触发条件的标的；配置为正整数时才限制对应市场单次最多展示数量。
 
 `FEISHU_STATUS_ON_SKIP` 用于控制“运行状态卡”。云端关键卡片工作流默认开启：当盘前或复盘任务正常运行，但没有生成有效名单时，会发送一张简短状态卡，说明系统仍在运行；重复补跑不会重复发送同一张状态卡。
 
@@ -107,7 +106,7 @@ PAPER_TRADING_TRAILING_TAKE_PROFIT_ARM_PCT
 
 `FEISHU_INTRADAY_STATUS_ON_IDLE` 用于控制盘中“暂无明显异动”的状态卡。云端盘中监控工作流默认开启：监控正常运行但没有达到异动门槛时，每个市场每天最多发送一张状态卡，避免群里长时间没有系统反馈。
 
-`PAPER_TRADING_ENABLED` 用于控制模拟跟单。云端工作流默认开启；A股默认模拟本金为 `10000` 人民币，美股默认模拟本金为 `10000` 美元，可分别用 `PAPER_TRADING_CN_CAPITAL` 和 `PAPER_TRADING_US_CAPITAL` 覆盖。模拟跟单只记录策略调仓、持仓市值和盈亏，不连接券商、不下真实订单。
+`PAPER_TRADING_ENABLED` 用于控制模拟跟单。云端工作流默认开启；韩股默认模拟本金为 `10000000` 韩元，美股默认模拟本金为 `10000` 美元，可分别用 `PAPER_TRADING_KR_CAPITAL` 和 `PAPER_TRADING_US_CAPITAL` 覆盖。模拟跟单只记录策略调仓、持仓市值和盈亏，不连接券商、不下真实订单。
 
 `PAPER_TRADING_RISK_CONTROL_ENABLED` 用于控制模拟跟单的盘中止盈止损纪律，云端盘中监控默认开启。默认纪律线为：亏损达到 `PAPER_TRADING_STOP_LOSS_PCT=5` 时模拟止损；盈利达到 `PAPER_TRADING_TAKE_PROFIT_PCT=8` 时模拟止盈；最高浮盈达到 `PAPER_TRADING_TRAILING_TAKE_PROFIT_ARM_PCT=8` 后，若回撤达到 `PAPER_TRADING_TRAILING_TAKE_PROFIT_DRAWDOWN_PCT=4`，则触发移动止盈。以上只更新模拟账本并推送飞书处理卡，不会真实下单。
 
@@ -125,7 +124,7 @@ Actions -> Stock Strategy Feishu Manual Push -> Run workflow
 all-preopen
 ```
 
-如果飞书群收到 A股策略 和 美股策略 两张卡片，说明云端推送链路已经打通。
+如果飞书群收到韩股策略和美股策略两张卡片，说明云端推送链路已经打通。
 
 ## 5. 状态保存
 
@@ -145,3 +144,6 @@ data/paper_trade_state.json
 - 如果仓库长期没有活动，GitHub 可能暂停定时工作流，需要在 Actions 页面重新启用。
 - 如果飞书机器人设置了 IP 白名单，GitHub Actions 的出口 IP 不固定，不建议使用固定 IP 白名单；如必须使用白名单，建议改用云服务器或云函数并绑定固定出口。
 - 本地 Windows 任务计划器和 GitHub Actions 不建议长期同时开启同一类任务，否则可能重复推送。
+# 当前状态：仅推送 Binance 股票合约信号
+
+当前 `Feishu strategy push` 云端机器人已经收敛为只抓取并推送 Binance 股票合约 / TradFi equity perpetual 多空信号，不扫描 BTC、ETH、SOL 等加密货币合约。旧的美股 / 韩股普通股票盘前卡、收盘复盘卡、盘中监控不再由 `.github/workflows/feishu-strategy-push.yml` 触发。合约推送入口见 `docs/binance-contract-data.md`。

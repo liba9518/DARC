@@ -1,4 +1,4 @@
-"""Generate and push separate US/A-share daily top-three Feishu cards."""
+"""Generate and push separate US/Korea daily Feishu strategy cards."""
 
 from __future__ import annotations
 
@@ -25,7 +25,6 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from integrations.a_stock_direct import fetch_tencent_quotes
 from integrations.card_language import confidence_text, sanitize_card, stock_display_name
 from integrations.daily_stock_selector import StockPick, select_daily_picks
 from src.services.intelligence_service import IntelligenceService
@@ -33,21 +32,40 @@ from scripts.paper_trading import build_paper_element, rebalance_to_picks
 from scripts.push_strategy_digest import configure_console_encoding, parse_tickers
 
 
-DEFAULT_US_POOL = "NVDA,MSFT,GOOGL,AMZN,META,AVGO,AMD,ANET,VRT,MU,TSM,PLTR"
-DEFAULT_A_POOL = "600519,300750,002594,601138,000063,002475,300308,688041,600276,601318,600036,000333"
-STATE_PATH = ROOT / "data" / "daily_card_state.json"
-
-
-CN_INDEX_SYMBOLS = (
-    ("sh000001", "上证指数"),
-    ("sz399001", "深证成指"),
-    ("sz399006", "创业板指"),
+DEFAULT_US_POOL = "NVDA,TSLA,AAPL,MSFT,AMZN,GOOGL,META,COIN,MSTR,SPY,QQQ,AMD,AVGO"
+DEFAULT_KR_POOL = (
+    "005930.KS,000660.KS,373220.KS,005380.KS,035420.KS,"
+    "051910.KS,006400.KS,035720.KQ,247540.KQ,091990.KQ"
 )
+DEFAULT_US_PICK_COUNT = 0
+DEFAULT_KR_PICK_COUNT = 0
+STATE_PATH = ROOT / "data" / "daily_card_state.json"
+FEISHU_WEBHOOK_ATTEMPTS = 3
+FEISHU_WEBHOOK_RETRY_DELAYS = (2.0, 5.0)
+FEISHU_WEBHOOK_RETRY_STATUS_CODES = {429, 500, 502, 503, 504}
+
+
 US_INDEX_SYMBOLS = (
     ("^GSPC", "标普五百"),
     ("^IXIC", "纳斯达克"),
     ("^DJI", "道琼斯"),
 )
+KR_INDEX_SYMBOLS = (
+    ("^KS11", "KOSPI"),
+    ("^KQ11", "KOSDAQ"),
+)
+KR_STOCK_NAMES = {
+    "005930.KS": "Samsung Electronics",
+    "000660.KS": "SK hynix",
+    "373220.KS": "LG Energy Solution",
+    "005380.KS": "Hyundai Motor",
+    "035420.KS": "NAVER",
+    "051910.KS": "LG Chem",
+    "006400.KS": "Samsung SDI",
+    "035720.KQ": "Kakao",
+    "247540.KQ": "Ecopro BM",
+    "091990.KQ": "Celltrion Healthcare",
+}
 
 
 def _sign(secret: str) -> dict[str, str]:
@@ -71,13 +89,18 @@ def build_strategy_card(
 ) -> dict[str, Any]:
     index_text = format_market_indices(market_indices or [])
     news_text = format_important_news(important_news or [])
+    if picks:
+        pick_label = "该标的" if len(picks) == 1 else f"以下{len(picks)}只"
+        conclusion = f"{pick_label}已经通过趋势、强弱和成交活跃度筛选，优先关注。"
+    else:
+        conclusion = "候选池暂未触发有效信号，本次不固定凑数。"
     elements: list[dict[str, Any]] = [
         {
             "tag": "div",
             "text": {
                 "tag": "lark_md",
                 "content": (
-                    f"**今日结论：** 以下三只已经通过趋势、强弱和成交活跃度筛选，优先关注。\n"
+                    f"**今日结论：** {conclusion}\n"
                     f"**判断方法：** 市场环境 + 多周期趋势 + 相对强度 + 资金链路 + 风险一致性\n"
                     f"**大盘指数：** {index_text}\n"
                     f"**重要快讯：** {news_text}\n"
@@ -178,15 +201,75 @@ def send_card(card: dict[str, Any]) -> None:
     payload: dict[str, Any] = {"msg_type": "interactive", "card": sanitize_card(card)}
     if secret:
         payload.update(_sign(secret))
-    response = requests.post(webhook, json=payload, timeout=30)
-    response.raise_for_status()
-    result = response.json()
-    if result.get("code", result.get("StatusCode", 0)) not in {0, None}:
-        raise RuntimeError(f"飞书卡片推送失败: {result}")
+    last_error: Exception | None = None
+    for attempt in range(1, FEISHU_WEBHOOK_ATTEMPTS + 1):
+        try:
+            response = requests.post(webhook, json=payload, timeout=30)
+            response.raise_for_status()
+            result = response.json()
+            if result.get("code", result.get("StatusCode", 0)) not in {0, None}:
+                raise RuntimeError(f"飞书卡片推送失败: {result}")
+            return
+        except requests.HTTPError as exc:
+            last_error = exc
+            status_code = exc.response.status_code if exc.response is not None else None
+            if status_code not in FEISHU_WEBHOOK_RETRY_STATUS_CODES or attempt >= FEISHU_WEBHOOK_ATTEMPTS:
+                raise
+        except requests.RequestException as exc:
+            last_error = exc
+            if attempt >= FEISHU_WEBHOOK_ATTEMPTS:
+                raise
+        delay = FEISHU_WEBHOOK_RETRY_DELAYS[min(attempt - 1, len(FEISHU_WEBHOOK_RETRY_DELAYS) - 1)]
+        print(
+            f"Feishu webhook push failed on attempt {attempt}; retrying in {delay:g}s: {last_error}",
+            file=sys.stderr,
+        )
+        time.sleep(delay)
+    if last_error is not None:
+        raise last_error
 
 
 def _env_flag(name: str, default: str = "false") -> bool:
     return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def stock_strategy_cards_enabled() -> bool:
+    if _env_flag("BINANCE_ONLY_FEISHU", "true"):
+        return False
+    return _env_flag("FEISHU_STOCK_CARDS_ENABLED", "false")
+
+
+def market_pick_count(market: str) -> int:
+    market_key = {
+        "us": "US_DAILY_CARD_PICK_COUNT",
+        "kr": "KR_DAILY_CARD_PICK_COUNT",
+    }.get(market, "DAILY_CARD_PICK_COUNT")
+    default = {
+        "us": DEFAULT_US_PICK_COUNT,
+        "kr": DEFAULT_KR_PICK_COUNT,
+    }.get(market, 0)
+    raw_value = os.getenv(market_key) or str(default)
+    try:
+        return max(0, int(raw_value))
+    except ValueError:
+        return default
+
+
+def market_state_key(market: str) -> str:
+    return {"us": "us", "kr": "kr"}.get(market, market)
+
+
+def market_label(market: str) -> str:
+    return {"us": "美国股票", "kr": "韩国股票"}.get(market, market.upper())
+
+
+def strategy_card_title(market: str, picks: list[StockPick], count: int) -> str:
+    label = {
+        "us": "🇺🇸 美股盘前策略",
+        "kr": "🇰🇷 韩股盘前策略",
+    }.get(market, f"{market.upper()} 盘前策略")
+    suffix = f"精选{count}只" if count > 0 else f"信号触发{len(picks)}只"
+    return f"{label}｜{suffix}"
 
 
 def _safe_float(value: Any) -> float:
@@ -196,43 +279,9 @@ def _safe_float(value: Any) -> float:
         return 0.0
 
 
-def fetch_cn_market_indices() -> list[dict[str, Any]]:
-    try:
-        query = ",".join(symbol for symbol, _ in CN_INDEX_SYMBOLS)
-        response = requests.get(
-            "https://qt.gtimg.cn/q=" + query,
-            headers={"User-Agent": "Mozilla/5.0 daily-stock-analysis/1.0"},
-            timeout=15,
-        )
-        response.raise_for_status()
-        response.encoding = "gbk"
-    except Exception:
-        return []
-    names = dict(CN_INDEX_SYMBOLS)
+def fetch_yfinance_market_indices(symbols: tuple[tuple[str, str], ...]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    for line in response.text.splitlines():
-        if '"' not in line:
-            continue
-        symbol = line.split("=", 1)[0].replace("v_", "").strip()
-        fields = line.split('"', 2)[1].split("~")
-        if len(fields) < 33:
-            continue
-        price = _safe_float(fields[3])
-        if price <= 0:
-            continue
-        rows.append(
-            {
-                "name": names.get(symbol, fields[1] or symbol),
-                "price": price,
-                "pct_change": _safe_float(fields[32]),
-            }
-        )
-    return rows
-
-
-def fetch_us_market_indices() -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    for symbol, name in US_INDEX_SYMBOLS:
+    for symbol, name in symbols:
         try:
             history = yf.Ticker(symbol).history(period="5d", interval="1d", auto_adjust=True)
         except Exception:
@@ -249,8 +298,20 @@ def fetch_us_market_indices() -> list[dict[str, Any]]:
     return rows
 
 
+def fetch_us_market_indices() -> list[dict[str, Any]]:
+    return fetch_yfinance_market_indices(US_INDEX_SYMBOLS)
+
+
+def fetch_kr_market_indices() -> list[dict[str, Any]]:
+    return fetch_yfinance_market_indices(KR_INDEX_SYMBOLS)
+
+
 def fetch_market_indices(market: str) -> list[dict[str, Any]]:
-    return fetch_us_market_indices() if market == "us" else fetch_cn_market_indices()
+    if market == "us":
+        return fetch_us_market_indices()
+    if market == "kr":
+        return fetch_kr_market_indices()
+    return []
 
 
 def format_market_indices(indices: list[dict[str, Any]]) -> str:
@@ -266,7 +327,7 @@ def fetch_important_news(market: str, *, limit: int = 3) -> list[dict[str, Any]]
     try:
         service = IntelligenceService()
         markets = [market]
-        if market in {"cn", "us"}:
+        if market in {"cn", "us", "kr"}:
             markets.append("global")
         collected: list[dict[str, Any]] = []
         seen: set[str] = set()
@@ -395,11 +456,12 @@ def stabilize_picks(
 ) -> list[StockPick]:
     previous = set(previous_codes)
     eligible = [pick for pick in ranked if pick.eligible]
-    pool = eligible if len(eligible) >= count else ranked
     stable = sorted(
-        pool,
+        eligible,
         key=lambda pick: (-(pick.score + (retention_bonus if pick.code in previous else 0)), pick.code),
     )
+    if count <= 0:
+        return stable
     return stable[:count]
 
 
@@ -467,7 +529,7 @@ def append_paper_trading_element(
 
 
 def generate_market_selection(market: str) -> tuple[list[StockPick], list[str]]:
-    count = max(1, int(os.getenv("DAILY_CARD_PICK_COUNT", "3")))
+    count = market_pick_count(market)
     retention_bonus = max(0.0, float(os.getenv("DAILY_CARD_RETENTION_BONUS", "4")))
     state = load_state()
 
@@ -477,7 +539,10 @@ def generate_market_selection(market: str) -> tuple[list[StockPick], list[str]]:
             pool,
             market="us",
             count=count,
-            minimum_liquidity=float(os.getenv("US_MIN_DOLLAR_VOLUME", "20000000")),
+            minimum_liquidity=float(os.getenv("US_MIN_DOLLAR_VOLUME", "10000000")),
+            selection_profile="us_contract",
+            include_reserves=0,
+            eligible_only=True,
         )
         picks = stabilize_picks(
             ranked,
@@ -487,41 +552,44 @@ def generate_market_selection(market: str) -> tuple[list[StockPick], list[str]]:
         )
         return picks, errors
 
-    pool = parse_tickers(os.getenv("A_STRATEGY_POOL", DEFAULT_A_POOL))
-    quotes = fetch_tencent_quotes(pool)
-    names = {str(item["code"]): str(item["name"]) for item in quotes}
-    ranked, errors = select_daily_picks(
-        pool,
-        market="cn",
-        names=names,
-        count=count,
-        minimum_liquidity=float(os.getenv("A_MIN_TURNOVER_CNY", "100000000")),
-    )
-    picks = stabilize_picks(
-        ranked,
-        list(state.get("a", {}).get("codes", [])),
-        count=count,
-        retention_bonus=retention_bonus,
-    )
-    return apply_a_share_realtime_quotes(picks, quotes) if is_a_share_preopen() else picks, errors
+    if market == "kr":
+        pool = parse_tickers(os.getenv("KR_STRATEGY_POOL") or os.getenv("KR_SIGNAL_POOL") or DEFAULT_KR_POOL)
+        ranked, errors = select_daily_picks(
+            pool,
+            market="kr",
+            names=KR_STOCK_NAMES,
+            count=count,
+            minimum_liquidity=float(os.getenv("KR_MIN_DAILY_TURNOVER_KRW", "5000000000")),
+            include_reserves=0,
+            eligible_only=True,
+        )
+        picks = stabilize_picks(
+            ranked,
+            list(state.get("kr", {}).get("codes", [])),
+            count=count,
+            retention_bonus=retention_bonus,
+        )
+        return picks, errors
+
+    raise ValueError(f"Unsupported strategy market: {market}")
 
 
 def generate_selections() -> tuple[list[StockPick], list[StockPick], list[str], list[str]]:
     us_picks, us_errors = generate_market_selection("us")
-    a_picks, a_errors = generate_market_selection("cn")
-    return us_picks, a_picks, us_errors, a_errors
+    kr_picks, kr_errors = generate_market_selection("kr")
+    return us_picks, kr_picks, us_errors, kr_errors
 
 
 def generate_cards() -> tuple[dict[str, Any], dict[str, Any]]:
-    count = max(1, int(os.getenv("DAILY_CARD_PICK_COUNT", "3")))
-    us_picks, a_picks, us_errors, a_errors = generate_selections()
+    us_picks, kr_picks, us_errors, kr_errors = generate_selections()
     us_indices = fetch_market_indices("us")
-    a_indices = fetch_market_indices("cn")
+    kr_indices = fetch_market_indices("kr")
     us_news = fetch_important_news("us")
-    a_news = fetch_important_news("cn")
+    kr_news = fetch_important_news("kr")
 
+    count = market_pick_count("us")
     us_card = build_strategy_card(
-        f"🇺🇸 美股盘前策略｜精选{count}只",
+        strategy_card_title("us", us_picks, count),
         "美国股票",
         us_picks,
         template="blue",
@@ -529,33 +597,40 @@ def generate_cards() -> tuple[dict[str, Any], dict[str, Any]]:
         important_news=us_news,
         errors=us_errors,
     )
-    a_card = build_strategy_card(
-        f"🇨🇳 A股盘前策略｜精选{count}只",
-        "沪深A股",
-        a_picks,
-        template="green",
-        market_indices=a_indices,
-        important_news=a_news,
-        errors=a_errors,
+    count = market_pick_count("kr")
+    kr_card = build_strategy_card(
+        strategy_card_title("kr", kr_picks, count),
+        market_label("kr"),
+        kr_picks,
+        template="turquoise",
+        market_indices=kr_indices,
+        important_news=kr_news,
+        errors=kr_errors,
     )
-    return us_card, a_card
+    return us_card, kr_card
 
 
 def run_once(*, market: str = "both", dry_run: bool = False, force: bool = False) -> None:
     load_dotenv(ROOT / ".env")
-    count = max(1, int(os.getenv("DAILY_CARD_PICK_COUNT", "3")))
-    markets = ("cn", "us") if market == "both" else (market,)
+    if not stock_strategy_cards_enabled():
+        print(
+            "Stock strategy cards are disabled by FEISHU_STOCK_CARDS_ENABLED=false; "
+            "use scripts/push_binance_long_signals.py for Binance stock contract signals."
+        )
+        return
+    markets = ("kr", "us") if market == "both" else (market,)
     cards: dict[str, dict[str, Any]] = {}
     picks_by_market: dict[str, list[StockPick]] = {}
     for selected_market in markets:
+        count = market_pick_count(selected_market)
         picks, errors = generate_market_selection(selected_market)
         market_indices = fetch_market_indices(selected_market)
         important_news = fetch_important_news(selected_market)
         picks_by_market[selected_market] = picks
         if selected_market == "us":
             cards[selected_market] = build_strategy_card(
-                f"🇺🇸 美股盘前策略｜精选{count}只",
-                "美国股票",
+                strategy_card_title("us", picks, count),
+                market_label("us"),
                 picks,
                 template="blue",
                 market_indices=market_indices,
@@ -564,10 +639,10 @@ def run_once(*, market: str = "both", dry_run: bool = False, force: bool = False
             )
         else:
             cards[selected_market] = build_strategy_card(
-                f"🇨🇳 A股盘前策略｜精选{count}只",
-                "沪深A股",
+                strategy_card_title(selected_market, picks, count),
+                market_label(selected_market),
                 picks,
-                template="green",
+                template="turquoise" if selected_market == "kr" else "green",
                 market_indices=market_indices,
                 important_news=important_news,
                 errors=errors,
@@ -585,7 +660,7 @@ def run_once(*, market: str = "both", dry_run: bool = False, force: bool = False
     state = load_state()
     sent = []
     for selected_market in markets:
-        state_key = "us" if selected_market == "us" else "a"
+        state_key = market_state_key(selected_market)
         picks = picks_by_market[selected_market]
         if not picks:
             print(f"{state_key.upper()} 未选出有效标的，跳过本次推送")
@@ -596,14 +671,18 @@ def run_once(*, market: str = "both", dry_run: bool = False, force: bool = False
                     task_key="preopen_empty",
                     reason="no_valid_picks",
                     card=build_status_card(
-                        title="🇨🇳 A股盘前策略｜运行状态"
-                        if selected_market == "cn"
-                        else "🇺🇸 美股盘前策略｜运行状态",
-                        market_label="沪深A股" if selected_market == "cn" else "美国股票",
+                        title=(
+                            "🇺🇸 美股盘前策略｜运行状态"
+                            if selected_market == "us"
+                            else "🇰🇷 韩股盘前策略｜运行状态"
+                            if selected_market == "kr"
+                            else f"{selected_market.upper()} 盘前策略｜运行状态"
+                        ),
+                        market_label=market_label(selected_market),
                         conclusion="云端盘前任务已经正常执行，本次没有筛出新的有效名单。",
                         action="保持上一版精选名单，不推送空卡，等待下一次有效信号。",
                         details=["数据源或筛选条件未达到策略门槛"],
-                        template="green" if selected_market == "cn" else "blue",
+                        template="blue" if selected_market == "us" else "turquoise",
                     ),
                 )
                 if sent_status:
@@ -632,24 +711,24 @@ def run_once(*, market: str = "both", dry_run: bool = False, force: bool = False
 
 def main() -> int:
     configure_console_encoding()
-    parser = argparse.ArgumentParser(description="生成美股/A股每日三只精选飞书卡片")
+    parser = argparse.ArgumentParser(description="生成美股/韩股每日策略飞书卡片")
     parser.add_argument("--dry-run", action="store_true", help="只生成JSON，不推送")
-    parser.add_argument("--schedule", action="store_true", help="按A/美股盘前时间常驻执行")
+    parser.add_argument("--schedule", action="store_true", help="按韩/美股盘前时间常驻执行")
     parser.add_argument("--force", action="store_true", help="即使行情与名单未变化也强制推送")
-    parser.add_argument("--market", choices=("cn", "us", "both"), default="both", help="只处理指定市场")
+    parser.add_argument("--market", choices=("kr", "us", "both"), default="both", help="只处理指定市场")
     args = parser.parse_args()
     if not args.schedule:
         run_once(market=args.market, dry_run=args.dry_run, force=args.force)
         return 0
 
     load_dotenv(ROOT / ".env")
-    a_time = os.getenv("A_CARD_SCHEDULE_TIME", "09:10").strip()
+    kr_time = os.getenv("KR_CARD_SCHEDULE_TIME", "07:40").strip()
     us_time = os.getenv("US_CARD_SCHEDULE_TIME", "21:10").strip()
-    schedule.every().day.at(a_time).do(run_once, market="cn", dry_run=args.dry_run, force=args.force)
+    schedule.every().day.at(kr_time).do(run_once, market="kr", dry_run=args.dry_run, force=args.force)
     schedule.every().day.at(us_time).do(run_once, market="us", dry_run=args.dry_run, force=args.force)
     if os.getenv("DAILY_CARD_RUN_IMMEDIATELY", "true").lower() == "true":
         run_once(market=args.market, dry_run=args.dry_run, force=args.force)
-    print(f"盘前卡片任务已启动：A股 {a_time}，美股 {us_time}")
+    print(f"盘前卡片任务已启动：韩股 {kr_time}，美股 {us_time}")
     while True:
         schedule.run_pending()
         time.sleep(1)

@@ -1,4 +1,9 @@
-"""Self-heal missed Feishu strategy pushes inside critical market windows."""
+"""Self-heal Feishu Binance stock contract signal pushes.
+
+The Feishu robot is intentionally limited to Binance TradFi/equity perpetual
+long/short signals. It does not run crypto perpetual contracts, US/Korea stock
+pre-open cards, post-close reviews, or intraday stock monitors.
+"""
 
 from __future__ import annotations
 
@@ -7,7 +12,7 @@ import json
 import os
 import sys
 from dataclasses import dataclass
-from datetime import date, datetime, time
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
@@ -18,8 +23,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.push_daily_strategy_cards import load_state, run_once as push_preopen
-from scripts.push_post_close_review import run_once as push_review
+from scripts.fetch_binance_contract_data import DEFAULT_INTERVAL, DEFAULT_LIMIT
+from scripts.push_binance_long_signals import run as push_contract_signals
 from scripts.push_strategy_digest import configure_console_encoding
 
 
@@ -30,90 +35,56 @@ LOCAL_TZ = ZoneInfo("Asia/Shanghai")
 class WatchdogTask:
     key: str
     label: str
-    market: str
-    state_key: str
-    timestamp_key: str
-    start: time
-    end: time
-    weekdays: tuple[int, ...]
-    runner: Callable[[], None]
+    runner: Callable[[], dict[str, Any]]
 
 
-def _run_cn_preopen() -> None:
-    push_preopen(market="cn", force=True)
+def _env_flag(name: str, default: str = "true") -> bool:
+    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _run_us_preopen() -> None:
-    push_preopen(market="us", force=True)
+def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
+    raw_value = os.getenv(name, "").strip()
+    if not raw_value:
+        return default
+    try:
+        return min(maximum, max(minimum, int(raw_value)))
+    except ValueError:
+        return default
 
 
-def _run_cn_midday_review() -> None:
-    push_review(market="cn", session="midday", force=True)
+def _env_float(name: str, default: float, *, minimum: float) -> float:
+    raw_value = os.getenv(name, "").strip()
+    if not raw_value:
+        return default
+    try:
+        return max(minimum, float(raw_value))
+    except ValueError:
+        return default
 
 
-def _run_cn_close_review() -> None:
-    push_review(market="cn", session="close", force=True)
-
-
-def _run_us_close_review() -> None:
-    push_review(market="us", session="close", force=True)
+def _run_binance_contract_signals() -> dict[str, Any]:
+    market = os.getenv("BINANCE_CONTRACT_MARKET", "usdm")
+    symbols = os.getenv("BINANCE_CONTRACT_SYMBOLS") or None
+    side = os.getenv("BINANCE_CONTRACT_SIGNAL_SIDE", "both")
+    min_score = float(os.getenv("BINANCE_SIGNAL_MIN_SCORE", os.getenv("BINANCE_LONG_SIGNAL_MIN_SCORE", "0")))
+    return push_contract_signals(
+        market=market,
+        symbols=symbols,
+        interval=os.getenv("BINANCE_CONTRACT_INTERVAL", DEFAULT_INTERVAL),
+        limit=_env_int("BINANCE_CONTRACT_KLINE_LIMIT", DEFAULT_LIMIT, minimum=2, maximum=1000),
+        timeout=_env_float("BINANCE_CONTRACT_TIMEOUT_SEC", 10.0, minimum=1.0),
+        side=side,
+        min_score=min_score,
+        dry_run=False,
+        push_empty=False,
+    )
 
 
 TASKS: tuple[WatchdogTask, ...] = (
     WatchdogTask(
-        key="cn-preopen",
-        label="A-share pre-open strategy",
-        market="cn",
-        state_key="a",
-        timestamp_key="pushed_at",
-        start=time(8, 50),
-        end=time(13, 30),
-        weekdays=(0, 1, 2, 3, 4),
-        runner=_run_cn_preopen,
-    ),
-    WatchdogTask(
-        key="cn-midday-review",
-        label="A-share midday review",
-        market="cn",
-        state_key="a",
-        timestamp_key="midday_reviewed_at",
-        start=time(11, 45),
-        end=time(13, 30),
-        weekdays=(0, 1, 2, 3, 4),
-        runner=_run_cn_midday_review,
-    ),
-    WatchdogTask(
-        key="cn-review",
-        label="A-share post-close review",
-        market="cn",
-        state_key="a",
-        timestamp_key="reviewed_at",
-        start=time(15, 20),
-        end=time(17, 0),
-        weekdays=(0, 1, 2, 3, 4),
-        runner=_run_cn_close_review,
-    ),
-    WatchdogTask(
-        key="us-preopen",
-        label="US-stock pre-open strategy",
-        market="us",
-        state_key="us",
-        timestamp_key="pushed_at",
-        start=time(20, 50),
-        end=time(21, 29),
-        weekdays=(0, 1, 2, 3, 4),
-        runner=_run_us_preopen,
-    ),
-    WatchdogTask(
-        key="us-review",
-        label="US-stock post-close review",
-        market="us",
-        state_key="us",
-        timestamp_key="reviewed_at",
-        start=time(6, 30),
-        end=time(8, 0),
-        weekdays=(1, 2, 3, 4, 5),
-        runner=_run_us_close_review,
+        key="binance-contract",
+        label="Binance stock contract long/short signals",
+        runner=_run_binance_contract_signals,
     ),
 )
 
@@ -127,45 +98,15 @@ def _parse_local_now(value: str | None) -> datetime:
     return parsed.astimezone(LOCAL_TZ)
 
 
-def _timestamp_local_date(value: Any) -> date | None:
-    if not value:
-        return None
-    try:
-        parsed = datetime.fromisoformat(str(value))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=LOCAL_TZ)
-    return parsed.astimezone(LOCAL_TZ).date()
-
-
-def _env_flag(name: str, default: str = "true") -> bool:
-    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
-
-
-def task_is_in_window(task: WatchdogTask, now: datetime) -> bool:
-    local_now = now.astimezone(LOCAL_TZ)
-    return local_now.weekday() in task.weekdays and task.start <= local_now.time() <= task.end
-
-
-def task_already_sent_today(task: WatchdogTask, state: dict[str, Any], now: datetime) -> bool:
-    section = state.get(task.state_key) or {}
-    return _timestamp_local_date(section.get(task.timestamp_key)) == now.astimezone(LOCAL_TZ).date()
-
-
 def due_tasks(
     *,
-    state: dict[str, Any],
     now: datetime,
     task_filter: str = "all",
 ) -> list[WatchdogTask]:
+    _ = now
     selected: list[WatchdogTask] = []
     for task in TASKS:
         if task_filter != "all" and task.key != task_filter:
-            continue
-        if not task_is_in_window(task, now):
-            continue
-        if task_already_sent_today(task, state, now):
             continue
         selected.append(task)
     return selected
@@ -173,19 +114,19 @@ def due_tasks(
 
 def run_watchdog(*, task_filter: str = "all", dry_run: bool = False, now: datetime | None = None) -> list[str]:
     load_dotenv(ROOT / ".env")
-    if not _env_flag("FEISHU_STRATEGY_WATCHDOG_ENABLED", "true"):
-        print("Strategy watchdog disabled by FEISHU_STRATEGY_WATCHDOG_ENABLED")
+    if not _env_flag("BINANCE_CONTRACT_WATCHDOG_ENABLED", os.getenv("FEISHU_STRATEGY_WATCHDOG_ENABLED", "true")):
+        print("Binance contract watchdog disabled by BINANCE_CONTRACT_WATCHDOG_ENABLED")
         return []
 
     current = now or datetime.now(LOCAL_TZ)
-    state = load_state()
-    selected = due_tasks(state=state, now=current, task_filter=task_filter)
+    selected = due_tasks(now=current, task_filter=task_filter)
     if dry_run:
         print(
             json.dumps(
                 {
                     "now": current.astimezone(LOCAL_TZ).isoformat(timespec="seconds"),
                     "due_tasks": [task.key for task in selected],
+                    "note": "Only Binance stock contract signals are scanned; no crypto or stock pre-open/review tasks are run.",
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -195,19 +136,20 @@ def run_watchdog(*, task_filter: str = "all", dry_run: bool = False, now: dateti
 
     completed: list[str] = []
     for task in selected:
-        print(f"Watchdog补发开始：{task.key} ({task.label})")
-        task.runner()
+        print(f"Watchdog scan started: {task.key} ({task.label})")
+        result = task.runner()
+        print(json.dumps(result, ensure_ascii=False, indent=2))
         completed.append(task.key)
     if completed:
-        print("Watchdog补发完成：" + ", ".join(completed))
+        print("Watchdog scan completed: " + ", ".join(completed))
     else:
-        print("Watchdog检查完成：没有需要补发的任务")
+        print("Watchdog scan completed: no task selected")
     return completed
 
 
 def main() -> int:
     configure_console_encoding()
-    parser = argparse.ArgumentParser(description="补发错过窗口的飞书策略关键卡片")
+    parser = argparse.ArgumentParser(description="Scan Binance stock contract signals and push Feishu only when triggered.")
     parser.add_argument(
         "--task",
         choices=("all", *(task.key for task in TASKS)),

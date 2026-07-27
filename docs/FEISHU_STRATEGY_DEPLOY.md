@@ -1,12 +1,12 @@
-# Quiver + A股直连 + 飞书部署
+# Quiver + 韩股/美股飞书策略部署
 
 本仓库以 `ZhuLinsen/daily_stock_analysis` 为主框架，保留其 AI 分析、15 套策略、WebUI、Docker 和飞书推送能力；同时增加独立的另类数据策略雷达：
 
 - 美股：Quiver Quant 官方 API（国会交易、内部人交易、政府合同、场外/暗池、Quiver News）。
-- A股：参考 `simonlin1212/a-stock-data` 的低封禁优先级，使用腾讯财经直连接口获取自选股行情、PE、PB、市值和换手。
+- 韩股：使用 Yahoo Finance `.KS` / `.KQ` 后缀代码获取日线行情和 KOSPI / KOSDAQ 指数。
 - AI供应链：读取 `wesson9527/chokepoint-atlas` 生成的研究包、赛道评分、候选公司和催化剂。
 - 推送：股票策略云端必须使用 `STOCK_FEISHU_WEBHOOK_URL`、股票签名密钥和关键词；不再回退通用 `FEISHU_WEBHOOK_URL`，避免与世界杯机器人串群。
-- 容错：Quiver 或 A股数据源失败时降级并继续推送。
+- 容错：Quiver 或韩股/美股数据源失败时降级并继续推送。
 
 ## 1. 配置
 
@@ -41,16 +41,17 @@ CHOKEPOINT_ATLAS_PATHS=data/chokepoint-atlas
 CHOKEPOINT_ATLAS_MAX_AGE_DAYS=45
 
 # 每日两张精选卡片
-US_STRATEGY_POOL=NVDA,MSFT,GOOGL,AMZN,META,AVGO,AMD,ANET,VRT,MU,TSM,PLTR
-A_STRATEGY_POOL=600519,300750,002594,601138,000063,002475,300308,688041,600276,601318,600036,000333
-DAILY_CARD_PICK_COUNT=3
-A_CARD_SCHEDULE_TIME=09:10
+US_STRATEGY_POOL=NVDA,TSLA,AAPL,MSFT,AMZN,GOOGL,META,COIN,MSTR,SPY,QQQ,AMD,AVGO
+KR_STRATEGY_POOL=005930.KS,000660.KS,373220.KS,005380.KS,035420.KS,051910.KS,006400.KS,035720.KQ,247540.KQ,091990.KQ
+US_DAILY_CARD_PICK_COUNT=0
+KR_DAILY_CARD_PICK_COUNT=0
+KR_CARD_SCHEDULE_TIME=07:40
 US_CARD_SCHEDULE_TIME=21:10
-A_REVIEW_SCHEDULE_TIME=15:20
+KR_REVIEW_SCHEDULE_TIME=14:50
 US_REVIEW_SCHEDULE_TIME=06:30
 DAILY_CARD_RETENTION_BONUS=4
-US_MIN_DOLLAR_VOLUME=20000000
-A_MIN_TURNOVER_CNY=100000000
+US_MIN_DOLLAR_VOLUME=10000000
+KR_MIN_DAILY_TURNOVER_KRW=5000000000
 FEISHU_STRATEGY_WATCHDOG_ENABLED=true
 
 # 主分析任务
@@ -60,6 +61,8 @@ SCHEDULE_RUN_IMMEDIATELY=false
 ```
 
 `QUIVER_API_TOKEN` 需要在 Quiver API 账户中获取；不同套餐可访问的数据集不同。没有 Token 时，主分析和 A 股行情仍可运行。
+
+`*_DAILY_CARD_PICK_COUNT=0` 表示不固定推荐数量，只要候选池内标的满足触发条件就推送；如需限制单次最多展示数量，可改成对应市场的具体正整数。
 
 ## 2. 生成 Chokepoint Atlas 数据
 
@@ -107,19 +110,19 @@ python -m venv .venv
 .\.venv\Scripts\python.exe main.py --schedule
 .\.venv\Scripts\python.exe scripts\push_strategy_digest.py --schedule
 
-# 美股/A股两张每日精选卡片
-.\.venv\Scripts\python.exe scripts\push_daily_strategy_cards.py --market cn
-.\.venv\Scripts\python.exe scripts\push_daily_strategy_cards.py --market us
-.\.venv\Scripts\python.exe scripts\push_daily_strategy_cards.py --schedule
+# 美股/韩股两张每日策略卡片
+.\.venv\Scripts\python.exe scripts\push_binance_long_signals.py --side both --symbols MU,SAND
+.\.venv\Scripts\python.exe scripts\push_binance_long_signals.py --side long --symbols MU,SAND
+.\.venv\Scripts\python.exe scripts\push_binance_long_signals.py --side short --symbols MU,SAND
 
 # 收盘复盘与次日预备策略
-.\.venv\Scripts\python.exe scripts\push_post_close_review.py --market cn
+.\.venv\Scripts\python.exe scripts\push_post_close_review.py --market kr
 .\.venv\Scripts\python.exe scripts\push_post_close_review.py --market us
 ```
 
 每日精选采用以下稳定性约束：
 
-- 先判断 SPY / 沪深300 的顺风、震荡或逆风环境。
+- 先判断 SPY / KOSPI 的顺风、震荡或逆风环境。
 - 只优先纳入价格、20日线和60日线方向一致的标的。
 - 使用相对基准强度，而不是只比较绝对涨幅。
 - 设置成交额门槛，排除流动性不足的候选。
@@ -131,17 +134,16 @@ python -m venv .venv
 
 云端盘前推送使用北京时间：
 
-- A股：09:00、09:10、09:20，三次都在 09:30 开盘前完成。
+- 韩股：07:40，对应韩国开盘前约 20 分钟。
 - 美股：20:50、21:10、21:25，三次都在北京时间 21:30 开盘前完成。
 - 信号只使用上一完整交易日数据，不读取尚未收盘的日 K 线。
 
 收盘后复盘闭环：
 
-- A股 11:45：中午复盘上午精选表现，并给出下午跟踪预案。
-- A股 15:20、15:30、15:40：统计当天精选表现、上涨命中数、市场环境，并生成次日预备名单。
+- 韩股 14:50：统计当天精选表现、上涨命中数、市场环境，并生成次日预备名单。
 - 美股北京时间 06:30、06:40、06:50：兼容夏令时与冬令时，确保在正式收盘以后执行。
 - 复盘会记录保留、新进入和暂时移出的标的。
-- 次日预备名单只用于研究准备；A股 / 美股盘前三次任务会重新计算并确认最终名单。
+- 次日预备名单只用于研究准备；韩股 / 美股盘前任务会重新计算并确认最终名单。
 - 相同收盘日期和复盘结论不会重复发送。
 - 云端看门狗会在关键窗口内检查当天是否已有成功推送记录；如果 GitHub 定时任务延迟或漏跑，会自动补发一次，已成功推送过则不会重复刷屏。
 
@@ -168,3 +170,6 @@ docker compose -f docker\docker-compose.yml logs -f strategy-digest
 - `a-stock-data` 原始说明保存在 `vendor/a-stock-data/`，其 Apache-2.0 许可要求保留来源说明。
 - `chokepoint-atlas` 当前仓库未提供明确 LICENSE，因此本项目只读取其用户生成的 JSON 输出，不复制或再分发其源码。
 - 另类数据观察分只用于排序，不能视为买卖建议。
+# 当前状态：仅推送 Binance 股票合约信号
+
+当前飞书机器人已经收敛为只抓取并推送 Binance 股票合约 / TradFi equity perpetual 多空信号，不扫描 BTC、ETH、SOL 等加密货币合约。旧的美股 / 韩股普通股票盘前卡、收盘复盘卡、盘中监控不再由 `.github/workflows/feishu-strategy-push.yml`、`scripts/run_stock_task.ps1` 或 `scripts/push_strategy_watchdog.py` 触发。合约推送入口见 `docs/binance-contract-data.md`。
