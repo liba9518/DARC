@@ -220,6 +220,133 @@ def build_long_signal_card(
     )
 
 
+def _signal_label(signal: str) -> str:
+    if signal == "long_watch":
+        return "做多观察"
+    if signal == "short_watch":
+        return "做空观察"
+    return "未触发"
+
+
+def _side_label(side: str) -> str:
+    return {"long": "只看做多", "short": "只看做空", "both": "多空都看"}.get(side, side)
+
+
+def build_contract_signal_card(
+    signals: list[BinanceContractSnapshot],
+    *,
+    all_snapshots: list[BinanceContractSnapshot],
+    errors: list[str],
+    interval: str,
+    limit: int,
+    side: str,
+) -> dict[str, Any]:
+    """Build a Feishu card with conservative lark_md formatting.
+
+    Feishu's markdown renderer can be picky around backticks and full-width
+    separators. Keep the symbol on a dedicated ``合约：`` line so stock token
+    names such as MUUSDT/SNDKUSDT are never swallowed by rendering.
+    """
+
+    now_text = datetime.now().strftime("%Y-%m-%d %H:%M")
+    long_count = sum(1 for item in signals if item.contract_signal == "long_watch")
+    short_count = sum(1 for item in signals if item.contract_signal == "short_watch")
+    header_title = (
+        f"Binance 股票合约多空信号 - 多 {long_count} / 空 {short_count}"
+        if signals
+        else "Binance 股票合约多空信号 - 当前无触发"
+    )
+    conclusion = (
+        f"当前触发 {len(signals)} 个合约信号：做多 {long_count} 个，做空 {short_count} 个。"
+        if signals
+        else "当前候选池没有满足做多或做空条件的合约，不建议为了推送而硬开仓。"
+    )
+    elements: list[dict[str, Any]] = [
+        {
+            "tag": "div",
+            "text": {
+                "tag": "lark_md",
+                "content": (
+                    f"**结论：** {conclusion}\n"
+                    f"**筛选：** 只扫描 Binance 股票代币合约；{_side_label(side)}；按价格动量、分数阈值、主动买卖结构判断。\n"
+                    f"**周期：** {interval} × {limit} 根K线　**生成：** {now_text}"
+                ),
+            },
+        },
+        {"tag": "hr"},
+    ]
+
+    rows = signals if signals else all_snapshots[:5]
+    if not rows:
+        elements.append(
+            {
+                "tag": "div",
+                "text": {"tag": "lark_md", "content": "未抓取到有效股票合约行情。"},
+            }
+        )
+
+    for index, item in enumerate(rows, start=1):
+        label = _signal_label(item.contract_signal)
+        elements.append(
+            {
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": (
+                        f"**{index}. 合约：{item.symbol}**\n"
+                        f"状态：**{label}**　评分：**{item.signal_score:+.2f}**\n"
+                        f"最新：**{item.last_price:g}**　标记：**{item.mark_price:g}**　指数：**{item.index_price:g}**\n"
+                        f"24h：**{_pct(item.price_change_pct_24h)}**　短周期：**{_pct(item.kline_return_pct)}**　"
+                        f"主动买入占比：**{item.taker_buy_quote_ratio:.2f}**\n"
+                        f"资金费率：**{_funding(item.last_funding_rate)}**　24h成交额：**{item.quote_volume_24h:,.0f}**"
+                    ),
+                },
+            }
+        )
+        elements.append({"tag": "hr"})
+
+    if errors:
+        elements.append(
+            {
+                "tag": "note",
+                "elements": [
+                    {
+                        "tag": "plain_text",
+                        "content": f"部分合约抓取失败：{len(errors)} 项；已跳过失败项。",
+                    }
+                ],
+            }
+        )
+    elements.append(
+        {
+            "tag": "note",
+            "elements": [
+                {
+                    "tag": "plain_text",
+                    "content": "仅为 Binance 股票合约行情信号，不代表自动下单；请按杠杆、止损和仓位纪律执行。",
+                }
+            ],
+        }
+    )
+
+    if long_count and short_count:
+        template = "purple"
+    elif short_count:
+        template = "red"
+    elif long_count:
+        template = "green"
+    else:
+        template = "grey"
+    return {
+        "config": {"wide_screen_mode": True},
+        "header": {
+            "template": template,
+            "title": {"tag": "plain_text", "content": header_title},
+        },
+        "elements": elements,
+    }
+
+
 def run(
     *,
     market: str,
