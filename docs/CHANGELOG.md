@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [改进] Binance 股票合约飞书卡片新增 Entry、SL、TP1、TP2、失效条件和单笔风险提示，明确区分观察信号与自动下单。
+
 - [改进] 飞书策略机器人收敛为只抓取并推送 Binance 股票合约多空信号，云端定时、本地任务入口和兜底守护均不再触发美股/韩股普通股票卡片、复盘或盘中监控。
 - [修复] 关闭旧股票盘前卡、收盘复盘和每日分析 workflow 对当前飞书机器人的默认推送，避免继续向合约信号群发送 A 股内容。
 - [改进] Binance 合约信号源进一步限定为股票合约 / TradFi equity perpetual，默认候选池移除 BTC、ETH、SOL 等加密货币合约，并通过 `exchangeInfo` 校验 `EQUITY` / `TRADIFI_PERPETUAL`。

@@ -232,6 +232,62 @@ def _side_label(side: str) -> str:
     return {"long": "只看做多", "short": "只看做空", "both": "多空都看"}.get(side, side)
 
 
+def _clamp(value: float, minimum: float, maximum: float) -> float:
+    return min(maximum, max(minimum, value))
+
+
+def _format_price(value: float) -> str:
+    return f"{value:.4f}".rstrip("0").rstrip(".")
+
+
+def _plan_base_price(item: BinanceContractSnapshot) -> float:
+    return item.mark_price or item.last_price or item.index_price
+
+
+def _risk_pct(item: BinanceContractSnapshot) -> float:
+    # Use recent K-line range as a volatility proxy, but keep the plan tight
+    # enough for contract trading and wide enough to avoid pure noise stops.
+    return _clamp(item.kline_range_pct * 0.35, 0.8, 3.0)
+
+
+def _trade_plan_lines(item: BinanceContractSnapshot) -> tuple[str, str]:
+    base = _plan_base_price(item)
+    if base <= 0 or item.contract_signal not in {"long_watch", "short_watch"}:
+        return (
+            "计划：无触发，不提供 Entry / SL / TP。",
+            "失效：等待下一轮扫描重新确认。",
+        )
+
+    risk_pct = _risk_pct(item)
+    entry_band = _clamp(risk_pct * 0.18, 0.15, 0.50)
+    if item.contract_signal == "long_watch":
+        entry_low = base * (1 - entry_band / 100)
+        entry_high = base * (1 + entry_band / 100)
+        stop = base * (1 - risk_pct / 100)
+        risk = base - stop
+        tp1 = base + risk
+        tp2 = base + risk * 2
+        invalidation = "15m 收盘跌破 SL，或主动买入占比跌回 0.50 以下。"
+    else:
+        entry_low = base * (1 - entry_band / 100)
+        entry_high = base * (1 + entry_band / 100)
+        stop = base * (1 + risk_pct / 100)
+        risk = stop - base
+        tp1 = max(0.0, base - risk)
+        tp2 = max(0.0, base - risk * 2)
+        invalidation = "15m 收盘突破 SL，或主动买入占比回到 0.50 以上。"
+
+    return (
+        "计划："
+        f"Entry {_format_price(entry_low)}-{_format_price(entry_high)}；"
+        f"SL {_format_price(stop)}；"
+        f"TP1 {_format_price(tp1)}；"
+        f"TP2 {_format_price(tp2)}；"
+        "单笔风险≤账户 0.5%-1%。",
+        f"失效：{invalidation}",
+    )
+
+
 def build_contract_signal_card(
     signals: list[BinanceContractSnapshot],
     *,
@@ -287,6 +343,7 @@ def build_contract_signal_card(
 
     for index, item in enumerate(rows, start=1):
         label = _signal_label(item.contract_signal)
+        plan_line, invalidation_line = _trade_plan_lines(item)
         elements.append(
             {
                 "tag": "div",
@@ -295,6 +352,8 @@ def build_contract_signal_card(
                     "content": (
                         f"**{index}. 合约：{item.symbol}**\n"
                         f"状态：**{label}**　评分：**{item.signal_score:+.2f}**\n"
+                        f"{plan_line}\n"
+                        f"{invalidation_line}\n"
                         f"最新：**{item.last_price:g}**　标记：**{item.mark_price:g}**　指数：**{item.index_price:g}**\n"
                         f"24h：**{_pct(item.price_change_pct_24h)}**　短周期：**{_pct(item.kline_return_pct)}**　"
                         f"主动买入占比：**{item.taker_buy_quote_ratio:.2f}**\n"

@@ -154,6 +154,52 @@ def test_signal_candidates_filters_long_and_short_watch_by_side():
     assert [item.symbol for item in signal_candidates(snapshots, side="short", min_score=0)] == ["AAPLUSDT"]
 
 
+def _card_text(card: dict) -> str:
+    parts = [card["header"]["title"]["content"]]
+    for element in card["elements"]:
+        if "text" in element:
+            parts.append(element["text"]["content"])
+        for note in element.get("elements", []):
+            parts.append(note.get("content", ""))
+    return "\n".join(parts)
+
+
+def test_contract_signal_card_includes_trade_plan_for_long_and_short():
+    card = long_signals.build_contract_signal_card(
+        [_snapshot("TSLAUSDT", "long_watch", 3.0), _snapshot("AAPLUSDT", "short_watch", -4.0)],
+        all_snapshots=[],
+        errors=[],
+        interval="15m",
+        limit=96,
+        side="both",
+    )
+    text = _card_text(card)
+
+    assert "TSLAUSDT" in text
+    assert "AAPLUSDT" in text
+    assert "Entry" in text
+    assert "SL" in text
+    assert "TP1" in text
+    assert "TP2" in text
+    assert "0.5%-1%" in text
+
+
+def test_contract_signal_card_does_not_show_entry_plan_for_neutral():
+    card = long_signals.build_contract_signal_card(
+        [],
+        all_snapshots=[_snapshot("NVDAUSDT", "neutral", 0.2)],
+        errors=[],
+        interval="15m",
+        limit=96,
+        side="both",
+    )
+    text = _card_text(card)
+
+    assert "NVDAUSDT" in text
+    assert "无触发" in text or "鏈Е鍙" in text
+    assert "不提供 Entry / SL / TP" in text
+
+
 def test_build_long_signal_card_marks_empty_status():
     card = build_long_signal_card(
         [],
