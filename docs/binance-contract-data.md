@@ -57,6 +57,8 @@ BINANCE_FUTURES_BASE_URL=https://fapi.binance.com
 
 Binance Futures 可能对 GitHub-hosted runner 所在机房返回 HTTP 451，导致云端 workflow 成功执行但抓不到任何合约行情。当前 `.github/workflows/feishu-strategy-push.yml` 已固定运行在带有 `binance-futures` 标签的 Windows x64 self-hosted runner 上。
 
+该 workflow 只安装 Binance 信号推送所需的最小依赖 `requests` 和 `python-dotenv`，避免在 Windows runner 上安装全量 `requirements.txt` 时被旧股票分析链路的无关依赖拖挂。
+
 如果本地 Windows 电脑已经可以访问 `https://fapi.binance.com/fapi/v1/time`、`MUUSDT` 和 `SNDKUSDT` ticker，可以直接把这台 Windows 电脑注册为仓库级 runner：
 
 1. 进入 GitHub 仓库 `Settings` -> `Actions` -> `Runners` -> `New self-hosted runner`。

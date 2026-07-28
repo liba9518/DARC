@@ -9,13 +9,18 @@ perpetual contracts and never places orders.
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
+import hmac
 import json
 import os
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import requests
 from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,11 +32,74 @@ from scripts.fetch_binance_contract_data import (
     BinanceContractSnapshot,
     DEFAULT_INTERVAL,
     DEFAULT_LIMIT,
+    configure_console_encoding,
     contract_symbols,
     fetch_contract_snapshots,
 )
-from scripts.push_daily_strategy_cards import send_card
-from scripts.push_strategy_digest import configure_console_encoding
+
+
+FEISHU_WEBHOOK_ATTEMPTS = 3
+FEISHU_WEBHOOK_RETRY_DELAYS = (2.0, 5.0)
+FEISHU_WEBHOOK_RETRY_STATUS_CODES = {429, 500, 502, 503, 504}
+
+
+def _sign(secret: str) -> dict[str, str]:
+    timestamp = str(int(time.time()))
+    string_to_sign = f"{timestamp}\n{secret}"
+    signature = base64.b64encode(
+        hmac.new(string_to_sign.encode("utf-8"), digestmod=hashlib.sha256).digest()
+    ).decode("utf-8")
+    return {"timestamp": timestamp, "sign": signature}
+
+
+def _stock_feishu_config() -> tuple[str, str, str]:
+    stock_webhook = os.getenv("STOCK_FEISHU_WEBHOOK_URL", "").strip()
+    if stock_webhook:
+        return (
+            stock_webhook,
+            os.getenv("STOCK_FEISHU_WEBHOOK_SECRET", "").strip(),
+            os.getenv("STOCK_FEISHU_WEBHOOK_KEYWORD", "").strip(),
+        )
+    return (
+        os.getenv("FEISHU_WEBHOOK_URL", "").strip(),
+        os.getenv("FEISHU_WEBHOOK_SECRET", "").strip(),
+        os.getenv("FEISHU_WEBHOOK_KEYWORD", "").strip(),
+    )
+
+
+def send_card(card: dict[str, Any]) -> None:
+    webhook, secret, _keyword = _stock_feishu_config()
+    if not webhook:
+        raise RuntimeError("未配置 STOCK_FEISHU_WEBHOOK_URL 或 FEISHU_WEBHOOK_URL")
+    payload: dict[str, Any] = {"msg_type": "interactive", "card": card}
+    if secret:
+        payload.update(_sign(secret))
+    last_error: Exception | None = None
+    for attempt in range(1, FEISHU_WEBHOOK_ATTEMPTS + 1):
+        try:
+            response = requests.post(webhook, json=payload, timeout=30)
+            response.raise_for_status()
+            result = response.json()
+            if result.get("code", result.get("StatusCode", 0)) not in {0, None}:
+                raise RuntimeError(f"飞书卡片推送失败: {result}")
+            return
+        except requests.HTTPError as exc:
+            last_error = exc
+            status_code = exc.response.status_code if exc.response is not None else None
+            if status_code not in FEISHU_WEBHOOK_RETRY_STATUS_CODES or attempt >= FEISHU_WEBHOOK_ATTEMPTS:
+                raise
+        except requests.RequestException as exc:
+            last_error = exc
+            if attempt >= FEISHU_WEBHOOK_ATTEMPTS:
+                raise
+        delay = FEISHU_WEBHOOK_RETRY_DELAYS[min(attempt - 1, len(FEISHU_WEBHOOK_RETRY_DELAYS) - 1)]
+        print(
+            f"Feishu webhook push failed on attempt {attempt}; retrying in {delay:g}s: {last_error}",
+            file=sys.stderr,
+        )
+        time.sleep(delay)
+    if last_error is not None:
+        raise last_error
 
 
 def _env_flag(name: str, default: str = "true") -> bool:

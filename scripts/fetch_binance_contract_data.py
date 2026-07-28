@@ -23,8 +23,6 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.push_strategy_digest import configure_console_encoding, parse_tickers
-
 
 DEFAULT_STOCK_PERP_SYMBOLS = (
     "TSLAUSDT,AAPLUSDT,NVDAUSDT,MSFTUSDT,AMZNUSDT,METAUSDT,GOOGLUSDT,AVGOUSDT,"
@@ -40,6 +38,25 @@ DEFAULT_STOCK_SYMBOL_ALIASES = {
 DEFAULT_USDM_BASE_URL = "https://fapi.binance.com"
 DEFAULT_INTERVAL = "15m"
 DEFAULT_LIMIT = 96
+
+
+def configure_console_encoding() -> None:
+    """Keep Windows terminals from failing on emoji/Chinese report output."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8", errors="replace")
+
+
+def parse_tickers(value: str) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for raw in value.replace("，", ",").split(","):
+        ticker = raw.strip().upper()
+        if ticker and ticker not in seen:
+            seen.add(ticker)
+            result.append(ticker)
+    return result
 
 
 @dataclass(frozen=True)
