@@ -11,7 +11,12 @@ from scripts.fetch_binance_contract_data import (
 )
 import scripts.fetch_binance_contract_data as contract_data
 import scripts.push_binance_long_signals as long_signals
-from scripts.push_binance_long_signals import build_long_signal_card, long_candidates, signal_candidates
+from scripts.push_binance_long_signals import (
+    build_long_signal_card,
+    long_candidates,
+    selected_signals,
+    signal_candidates,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -193,6 +198,13 @@ def test_contract_signal_card_includes_trade_plan_for_long_and_short():
 
     assert "TSLAUSDT" in text
     assert "AAPLUSDT" in text
+    assert "开多精选" in text
+    assert "开空精选" in text
+    assert "分数怎么看" in text
+    assert "做多逻辑" in text
+    assert "做空逻辑" in text
+    assert "分数含义" in text
+    assert "模拟胜率" in text
     assert "参考入场" in text
     assert "止损" in text
     assert "止盈1" in text
@@ -202,6 +214,63 @@ def test_contract_signal_card_includes_trade_plan_for_long_and_short():
     assert "方向 做空" in text
     assert "预估保证金" in text
     assert "0.5%-1%" in text
+
+
+def test_selected_signals_keeps_top_three_per_side():
+    snapshots = [
+        _snapshot("L1USDT", "long_watch", 1.0),
+        _snapshot("L2USDT", "long_watch", 2.0),
+        _snapshot("L3USDT", "long_watch", 3.0),
+        _snapshot("L4USDT", "long_watch", 4.0),
+        _snapshot("S1USDT", "short_watch", -1.0),
+        _snapshot("S2USDT", "short_watch", -2.0),
+        _snapshot("S3USDT", "short_watch", -3.0),
+        _snapshot("S4USDT", "short_watch", -4.0),
+    ]
+
+    selected = selected_signals(snapshots)
+
+    assert [item.symbol for item in selected] == [
+        "L4USDT",
+        "L3USDT",
+        "L2USDT",
+        "S4USDT",
+        "S3USDT",
+        "S2USDT",
+    ]
+
+
+def test_contract_signal_card_separates_long_and_short_and_limits_rows():
+    signals = [
+        _snapshot("L1USDT", "long_watch", 1.0),
+        _snapshot("L2USDT", "long_watch", 2.0),
+        _snapshot("L3USDT", "long_watch", 3.0),
+        _snapshot("L4USDT", "long_watch", 4.0),
+        _snapshot("S1USDT", "short_watch", -1.0),
+        _snapshot("S2USDT", "short_watch", -2.0),
+        _snapshot("S3USDT", "short_watch", -3.0),
+        _snapshot("S4USDT", "short_watch", -4.0),
+    ]
+    card = long_signals.build_contract_signal_card(
+        signals,
+        all_snapshots=[],
+        errors=[],
+        interval="15m",
+        limit=96,
+        side="both",
+    )
+    text = _card_text(card)
+
+    assert "开多精选（最多 3 支）" in text
+    assert "开空精选（最多 3 支）" in text
+    assert "L4USDT" in text
+    assert "L3USDT" in text
+    assert "L2USDT" in text
+    assert "L1USDT" not in text
+    assert "S4USDT" in text
+    assert "S3USDT" in text
+    assert "S2USDT" in text
+    assert "S1USDT" not in text
 
 
 def test_contract_signal_card_does_not_show_entry_plan_for_neutral():
@@ -400,3 +469,46 @@ def test_run_side_short_excludes_long_candidates_from_result(monkeypatch):
     assert result["shorts"] == ["AAPLUSDT"]
     assert result["signals"] == ["AAPLUSDT"]
     assert result["pushed"] is True
+
+
+def test_run_limits_pushed_and_simulated_signals_to_top_three_per_side(monkeypatch):
+    sent_cards = []
+    snapshots = [
+        _snapshot("L1USDT", "long_watch", 1.0),
+        _snapshot("L2USDT", "long_watch", 2.0),
+        _snapshot("L3USDT", "long_watch", 3.0),
+        _snapshot("L4USDT", "long_watch", 4.0),
+        _snapshot("S1USDT", "short_watch", -1.0),
+        _snapshot("S2USDT", "short_watch", -2.0),
+        _snapshot("S3USDT", "short_watch", -3.0),
+        _snapshot("S4USDT", "short_watch", -4.0),
+    ]
+    monkeypatch.setattr(long_signals, "fetch_contract_snapshots", lambda *args, **kwargs: (snapshots, []))
+    monkeypatch.setattr(long_signals, "send_card", lambda card: sent_cards.append(card))
+
+    result = long_signals.run(
+        market="usdm",
+        symbols="L1USDT,L2USDT,L3USDT,L4USDT,S1USDT,S2USDT,S3USDT,S4USDT",
+        interval="15m",
+        limit=96,
+        timeout=10,
+        side="both",
+        min_score=0,
+        dry_run=False,
+        push_empty=False,
+    )
+    state = json.loads(long_signals.SIM_STATE_PATH.read_text(encoding="utf-8"))
+
+    assert result["raw_signal_count"] == 8
+    assert result["signal_count"] == 6
+    assert result["longs"] == ["L4USDT", "L3USDT", "L2USDT"]
+    assert result["shorts"] == ["S4USDT", "S3USDT", "S2USDT"]
+    assert [order["symbol"] for order in state["orders"]] == [
+        "L4USDT",
+        "L3USDT",
+        "L2USDT",
+        "S4USDT",
+        "S3USDT",
+        "S2USDT",
+    ]
+    assert sent_cards

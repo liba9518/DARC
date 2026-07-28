@@ -41,6 +41,7 @@ from scripts.fetch_binance_contract_data import (
 FEISHU_WEBHOOK_ATTEMPTS = 3
 FEISHU_WEBHOOK_RETRY_DELAYS = (2.0, 5.0)
 FEISHU_WEBHOOK_RETRY_STATUS_CODES = {429, 500, 502, 503, 504}
+MAX_SIGNALS_PER_SIDE = 3
 
 
 def _sign(secret: str) -> dict[str, str]:
@@ -633,6 +634,131 @@ def _sim_events_line(simulation: dict[str, Any] | None) -> str:
     return "模拟变动：" + "；".join(parts) + "。"
 
 
+def _score_explanation() -> str:
+    return (
+        "分数怎么看：正分越高，说明做多条件越集中；负分越低，说明做空条件越集中；"
+        "接近 0 代表方向不明显。分数不是胜率，也不是下单命令，只用于排序优先级。"
+    )
+
+
+def _direction_logic_text(direction: str) -> str:
+    if direction == "long":
+        return (
+            "做多逻辑：短周期价格动量转强，主动买入占比偏高，标记价/指数价没有明显失真，"
+            "资金费率风险可控，优先找顺势突破或回踩承接。"
+        )
+    return (
+        "做空逻辑：短周期价格动量转弱，主动买入不足或卖压占优，反弹承压，"
+        "标记价/指数价没有明显失真，资金费率风险可控。"
+    )
+
+
+def _score_meaning(item: BinanceContractSnapshot) -> str:
+    strength = abs(item.signal_score)
+    if strength >= 5:
+        level = "强"
+    elif strength >= 2:
+        level = "中等"
+    else:
+        level = "轻微"
+    if item.contract_signal == "short_watch":
+        return f"分数含义：偏空{level}信号；负分绝对值越大，空头条件越集中。"
+    if item.contract_signal == "long_watch":
+        return f"分数含义：偏多{level}信号；正分越高，多头条件越集中。"
+    return "分数含义：方向不明显，仅作候选池参考。"
+
+
+def _rank_long_signal(item: BinanceContractSnapshot) -> tuple[float, float, str]:
+    return (-item.signal_score, -item.quote_volume_24h, item.symbol)
+
+
+def _rank_short_signal(item: BinanceContractSnapshot) -> tuple[float, float, str]:
+    return (item.signal_score, -item.quote_volume_24h, item.symbol)
+
+
+def signal_sections(
+    signals: list[BinanceContractSnapshot],
+    *,
+    per_side_limit: int = MAX_SIGNALS_PER_SIDE,
+) -> tuple[list[BinanceContractSnapshot], list[BinanceContractSnapshot]]:
+    longs = sorted(
+        [item for item in signals if item.contract_signal == "long_watch"],
+        key=_rank_long_signal,
+    )[:per_side_limit]
+    shorts = sorted(
+        [item for item in signals if item.contract_signal == "short_watch"],
+        key=_rank_short_signal,
+    )[:per_side_limit]
+    return longs, shorts
+
+
+def selected_signals(
+    signals: list[BinanceContractSnapshot],
+    *,
+    per_side_limit: int = MAX_SIGNALS_PER_SIDE,
+) -> list[BinanceContractSnapshot]:
+    longs, shorts = signal_sections(signals, per_side_limit=per_side_limit)
+    return longs + shorts
+
+
+def _candidate_preview(all_snapshots: list[BinanceContractSnapshot]) -> list[BinanceContractSnapshot]:
+    return sorted(all_snapshots, key=lambda item: (-abs(item.signal_score), -item.quote_volume_24h))[:3]
+
+
+def _append_signal_section(
+    elements: list[dict[str, Any]],
+    *,
+    title: str,
+    logic: str,
+    items: list[BinanceContractSnapshot],
+    empty_text: str,
+) -> None:
+    elements.append(
+        {
+            "tag": "div",
+            "text": {
+                "tag": "lark_md",
+                "content": f"**{title}**\n{logic}",
+            },
+        }
+    )
+    if not items:
+        elements.append(
+            {
+                "tag": "div",
+                "text": {"tag": "lark_md", "content": empty_text},
+            }
+        )
+        elements.append({"tag": "hr"})
+        return
+
+    for index, item in enumerate(items, start=1):
+        label = _signal_label(item.contract_signal)
+        plan_line, invalidation_line = _trade_plan_lines(item)
+        sim_order_line = _sim_order_line(item)
+        elements.append(
+            {
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": (
+                        f"**{index}. 合约：{item.symbol}**\n"
+                        f"方向：**{label}**　评分：**{item.signal_score:+.2f}**\n"
+                        f"{_score_meaning(item)}\n"
+                        f"{plan_line}\n"
+                        f"{sim_order_line}\n"
+                        f"{invalidation_line}\n"
+                        f"最新：**{item.last_price:g}**　标记：**{item.mark_price:g}**　指数：**{item.index_price:g}**\n"
+                        f"24h：**{_pct(item.price_change_pct_24h)}**　短周期：**{_pct(item.kline_return_pct)}**　"
+                        f"主动买入占比：**{item.taker_buy_quote_ratio:.2f}**\n"
+                        f"资金费率：**{_funding(item.last_funding_rate)}**　24h成交额：**{item.quote_volume_24h:,.0f}**"
+                    ),
+                },
+            }
+        )
+        elements.append({"tag": "hr"})
+
+
 def build_contract_signal_card(
     signals: list[BinanceContractSnapshot],
     *,
@@ -651,15 +777,16 @@ def build_contract_signal_card(
     """
 
     now_text = datetime.now().strftime("%Y-%m-%d %H:%M")
-    long_count = sum(1 for item in signals if item.contract_signal == "long_watch")
-    short_count = sum(1 for item in signals if item.contract_signal == "short_watch")
+    long_signals, short_signals = signal_sections(signals)
+    long_count = len(long_signals)
+    short_count = len(short_signals)
     header_title = (
-        f"Binance 股票合约多空信号 - 多 {long_count} / 空 {short_count}"
+        f"Binance 股票合约多空信号 - 开多 {long_count} / 开空 {short_count}"
         if signals
         else "Binance 股票合约多空信号 - 当前无触发"
     )
     conclusion = (
-        f"当前触发 {len(signals)} 个合约信号：做多 {long_count} 个，做空 {short_count} 个。"
+        f"当前精选 {len(long_signals) + len(short_signals)} 个合约信号：开多 {long_count} 个，开空 {short_count} 个；每边最多展示 {MAX_SIGNALS_PER_SIDE} 支。"
         if signals
         else "当前候选池没有满足做多或做空条件的合约，不建议为了推送而硬开仓。"
     )
@@ -671,6 +798,7 @@ def build_contract_signal_card(
                 "content": (
                     f"**结论：** {conclusion}\n"
                     f"**筛选：** 只扫描 Binance 股票代币合约；{_side_label(side)}；按价格动量、分数阈值、主动买卖结构判断。\n"
+                    f"**{_score_explanation()}**\n"
                     f"**周期：** {interval} × {limit} 根K线　**生成：** {now_text}\n"
                     f"**{_sim_stats_line(simulation)}**\n"
                     f"{_sim_events_line(simulation)}"
@@ -680,8 +808,33 @@ def build_contract_signal_card(
         {"tag": "hr"},
     ]
 
-    rows = signals if signals else all_snapshots[:5]
-    if not rows:
+    _append_signal_section(
+        elements,
+        title=f"开多精选（最多 {MAX_SIGNALS_PER_SIDE} 支）",
+        logic=_direction_logic_text("long"),
+        items=long_signals,
+        empty_text="本轮没有满足开多条件的股票合约；不为了凑数量硬开多。",
+    )
+    _append_signal_section(
+        elements,
+        title=f"开空精选（最多 {MAX_SIGNALS_PER_SIDE} 支）",
+        logic=_direction_logic_text("short"),
+        items=short_signals,
+        empty_text="本轮没有满足开空条件的股票合约；不为了凑数量硬开空。",
+    )
+
+    preview_rows = [] if signals else _candidate_preview(all_snapshots)
+    if not signals and preview_rows:
+        elements.append(
+            {
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": "**未触发候选参考**\n下面只用于解释为什么没有开仓信号，不建议据此交易。",
+                },
+            }
+        )
+    if not signals and not preview_rows:
         elements.append(
             {
                 "tag": "div",
@@ -689,7 +842,7 @@ def build_contract_signal_card(
             }
         )
 
-    for index, item in enumerate(rows, start=1):
+    for index, item in enumerate(preview_rows, start=1):
         label = _signal_label(item.contract_signal)
         plan_line, invalidation_line = _trade_plan_lines(item)
         sim_order_line = _sim_order_line(item)
@@ -701,6 +854,7 @@ def build_contract_signal_card(
                     "content": (
                         f"**{index}. 合约：{item.symbol}**\n"
                         f"状态：**{label}**　评分：**{item.signal_score:+.2f}**\n"
+                        f"{_score_meaning(item)}\n"
                         f"{plan_line}\n"
                         f"{sim_order_line}\n"
                         f"{invalidation_line}\n"
@@ -775,7 +929,8 @@ def run(
         limit=limit,
         timeout=timeout,
     )
-    signals = signal_candidates(snapshots, side=side, min_score=min_score)
+    raw_signals = signal_candidates(snapshots, side=side, min_score=min_score)
+    signals = selected_signals(raw_signals)
     longs = [item for item in signals if item.contract_signal == "long_watch"]
     shorts = [item for item in signals if item.contract_signal == "short_watch"]
     simulation = _update_sim_orders(snapshots=snapshots, signals=signals, dry_run=dry_run)
@@ -792,6 +947,7 @@ def run(
         "long_count": len(longs),
         "short_count": len(shorts),
         "signal_count": len(signals),
+        "raw_signal_count": len(raw_signals),
         "snapshot_count": len(snapshots),
         "errors": errors,
         "longs": [item.symbol for item in longs],

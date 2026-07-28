@@ -53,6 +53,19 @@ BINANCE_FUTURES_BASE_URL=https://fapi.binance.com
 - 多空都看：`python scripts/push_binance_long_signals.py --side both`
 - 临时发送空状态卡：追加 `--push-empty`
 
+飞书卡片会把信号分成“开多精选”和“开空精选”两块，每个方向最多展示 3 支合约。若同一方向触发超过 3 支，会优先展示分数绝对值更强、24h 成交额更高的合约；模拟开单也只跟随卡片里的精选合约，避免后台记录了用户看不到的信号。
+
+卡片里的分数按通俗口径解释：
+
+- 正分越高：做多条件越集中，优先作为开多观察。
+- 负分越低：做空条件越集中，优先作为开空观察。
+- 接近 0：方向不明显，不建议为了交易而硬开仓。
+- 分数只用于排序，不等于胜率，也不是自动下单命令。
+
+做多逻辑主要看短周期价格动量转强、主动买入占比偏高、标记价/指数价没有明显失真、资金费率风险可控；做空逻辑主要看短周期动量转弱、主动买入不足或卖压占优、反弹承压、资金费率风险可控。
+
+卡片展示的胜率来自本地模拟开单账本：有已平仓样本时显示胜负笔数、模拟胜率、累计盈亏和当前持仓；样本不足时会明确提示“暂无已平仓样本”。该胜率只是当前规则的模拟记录，不代表未来收益保证。
+
 ## GitHub Actions 自托管 runner
 
 Binance Futures 可能对 GitHub-hosted runner 所在机房返回 HTTP 451，导致云端 workflow 成功执行但抓不到任何合约行情。当前 `.github/workflows/feishu-strategy-push.yml` 已固定运行在带有 `binance-futures` 标签的 Windows x64 self-hosted runner 上。
