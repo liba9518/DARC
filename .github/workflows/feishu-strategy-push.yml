@@ -42,9 +42,9 @@ concurrency:
 jobs:
   push:
     # Binance Futures returns HTTP 451 from many GitHub-hosted runner regions.
-    # Register a Linux x64 self-hosted runner on a VPS that can access
+    # Register a Windows x64 self-hosted runner on a machine that can access
     # fapi.binance.com, and add the custom label `binance-futures`.
-    runs-on: [self-hosted, linux, x64, binance-futures]
+    runs-on: [self-hosted, windows, x64, binance-futures]
     timeout-minutes: 20
     env:
       TZ: Asia/Shanghai
@@ -84,7 +84,7 @@ jobs:
           python -m pip install -r requirements.txt
 
       - name: Prepare runtime directories
-        run: mkdir -p data logs reports
+        run: New-Item -ItemType Directory -Force -Path data, logs, reports | Out-Null
 
       - name: Restore Binance simulation state
         uses: actions/cache/restore@v4
@@ -95,62 +95,54 @@ jobs:
             binance-contract-sim-state-
 
       - name: Verify Feishu webhook secret
-        shell: bash
+        shell: pwsh
         run: |
-          if [[ -z "${FEISHU_WEBHOOK_URL}" ]]; then
-            echo "FEISHU_WEBHOOK_URL is required. Add it to GitHub Actions secrets." >&2
+          if ([string]::IsNullOrWhiteSpace($env:FEISHU_WEBHOOK_URL)) {
+            Write-Error "FEISHU_WEBHOOK_URL is required. Add it to GitHub Actions secrets."
             exit 1
-          fi
+          }
 
       - name: Verify Binance Futures access
-        shell: bash
+        shell: pwsh
         run: |
-          python - <<'PY'
-          import os
-          import requests
-
-          base_url = os.environ.get("BINANCE_FUTURES_BASE_URL", "https://fapi.binance.com").rstrip("/")
-          response = requests.get(f"{base_url}/fapi/v1/time", timeout=10)
-          response.raise_for_status()
-          print(f"Binance Futures API access OK: {response.json().get('serverTime')}")
-          PY
+          python -c "import os, requests; base_url=os.environ.get('BINANCE_FUTURES_BASE_URL','https://fapi.binance.com').rstrip('/'); response=requests.get(base_url + '/fapi/v1/time', timeout=10); response.raise_for_status(); print('Binance Futures API access OK: ' + str(response.json().get('serverTime')))"
 
       - name: Push Binance stock contract signals
-        shell: bash
+        shell: pwsh
         run: |
-          set -euo pipefail
+          $ErrorActionPreference = "Stop"
 
-          market="${BINANCE_CONTRACT_MARKET}"
-          side="${BINANCE_CONTRACT_SIGNAL_SIDE}"
-          symbols="${BINANCE_CONTRACT_SYMBOLS}"
-          push_empty="false"
+          $market = $env:BINANCE_CONTRACT_MARKET
+          $side = $env:BINANCE_CONTRACT_SIGNAL_SIDE
+          $symbols = $env:BINANCE_CONTRACT_SYMBOLS
+          $pushEmpty = "false"
 
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            market="${{ inputs.market }}"
-            side="${{ inputs.side }}"
-            symbols="${{ inputs.symbols }}"
-            push_empty="${{ inputs.push_empty }}"
-          fi
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            $market = "${{ inputs.market }}"
+            $side = "${{ inputs.side }}"
+            $symbols = "${{ inputs.symbols }}"
+            $pushEmpty = "${{ inputs.push_empty }}"
+          }
 
-          args=(
-            scripts/push_binance_long_signals.py
-            --market "$market"
-            --side "$side"
-            --interval "${BINANCE_CONTRACT_INTERVAL}"
-            --limit "${BINANCE_CONTRACT_KLINE_LIMIT}"
-            --timeout "${BINANCE_CONTRACT_TIMEOUT_SEC}"
-            --min-score "${BINANCE_SIGNAL_MIN_SCORE}"
-            --no-push-empty
+          $scriptArgs = @(
+            "scripts/push_binance_long_signals.py",
+            "--market", $market,
+            "--side", $side,
+            "--interval", $env:BINANCE_CONTRACT_INTERVAL,
+            "--limit", $env:BINANCE_CONTRACT_KLINE_LIMIT,
+            "--timeout", $env:BINANCE_CONTRACT_TIMEOUT_SEC,
+            "--min-score", $env:BINANCE_SIGNAL_MIN_SCORE,
+            "--no-push-empty"
           )
 
-          if [[ -n "${symbols}" ]]; then
-            args+=(--symbols "${symbols}")
-          fi
-          if [[ "${push_empty}" == "true" ]]; then
-            args+=(--push-empty)
-          fi
+          if (-not [string]::IsNullOrWhiteSpace($symbols)) {
+            $scriptArgs += @("--symbols", $symbols)
+          }
+          if ($pushEmpty -eq "true") {
+            $scriptArgs += "--push-empty"
+          }
 
-          python "${args[@]}"
+          python @scriptArgs
 
       - name: Save Binance simulation state
         if: always() && hashFiles('data/binance_contract_sim_state.json') != ''
