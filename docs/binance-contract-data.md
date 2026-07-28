@@ -53,6 +53,32 @@ BINANCE_FUTURES_BASE_URL=https://fapi.binance.com
 - 多空都看：`python scripts/push_binance_long_signals.py --side both`
 - 临时发送空状态卡：追加 `--push-empty`
 
+## GitHub Actions 自托管 runner / VPS
+
+Binance Futures 可能对 GitHub-hosted runner 所在机房返回 HTTP 451，导致云端 workflow 成功执行但抓不到任何合约行情。当前 `.github/workflows/feishu-strategy-push.yml` 已固定运行在带有 `binance-futures` 标签的 Linux x64 self-hosted runner 上。
+
+建议用一台能访问 `https://fapi.binance.com/fapi/v1/time` 的 VPS 注册仓库级 runner：
+
+1. 进入 GitHub 仓库 `Settings` -> `Actions` -> `Runners` -> `New self-hosted runner`。
+2. 选择 Linux x64，按页面命令下载并配置 runner。
+3. 配置 runner 时添加标签：`binance-futures`。最终 workflow 匹配条件是 `[self-hosted, linux, x64, binance-futures]`。
+4. 建议安装基础依赖：
+
+   ```bash
+   sudo apt-get update
+   sudo apt-get install -y curl tar unzip zstd python3 python3-venv python3-pip
+   curl -fsSL https://fapi.binance.com/fapi/v1/time
+   ```
+
+5. 将 runner 安装成服务并启动，确保 VPS 重启后仍会接单：
+
+   ```bash
+   sudo ./svc.sh install
+   sudo ./svc.sh start
+   ```
+
+如果 VPS 仍然被 Binance 返回 451，workflow 会在 `Verify Binance Futures access` 步骤失败；此时需要更换 VPS 出口地区或网络。
+
 ## 当前抓取字段
 
 - `exchangeInfo`：用于确认只扫描 `EQUITY` / `TRADIFI_PERPETUAL`。

@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [改进] Binance 股票合约 Feishu workflow 改为运行在带 `binance-futures` 标签的 self-hosted Linux x64 runner，并新增 Binance Futures 访问预检，避免 GitHub-hosted runner 被 451 拦截后静默无推送。
 - [改进] Binance 股票合约模拟开单在多空信号触发时写入独立账本，后续扫描按止盈/止损自动平仓并在飞书卡片展示胜率、胜负笔数、累计盈亏和持仓数。
 - [改进] Binance 股票合约信号 GitHub Actions 新增模拟账本 cache 恢复与保存，避免云端定时扫描每轮重置胜率数据。
 - [改进] Binance 股票合约飞书卡片新增模拟开单提示，按模拟账户权益、单笔风险、杠杆和最大保证金占用估算方向、数量、名义仓位和预估保证金。

@@ -41,7 +41,10 @@ concurrency:
 
 jobs:
   push:
-    runs-on: ubuntu-latest
+    # Binance Futures returns HTTP 451 from many GitHub-hosted runner regions.
+    # Register a Linux x64 self-hosted runner on a VPS that can access
+    # fapi.binance.com, and add the custom label `binance-futures`.
+    runs-on: [self-hosted, linux, x64, binance-futures]
     timeout-minutes: 20
     env:
       TZ: Asia/Shanghai
@@ -98,6 +101,19 @@ jobs:
             echo "FEISHU_WEBHOOK_URL is required. Add it to GitHub Actions secrets." >&2
             exit 1
           fi
+
+      - name: Verify Binance Futures access
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          import requests
+
+          base_url = os.environ.get("BINANCE_FUTURES_BASE_URL", "https://fapi.binance.com").rstrip("/")
+          response = requests.get(f"{base_url}/fapi/v1/time", timeout=10)
+          response.raise_for_status()
+          print(f"Binance Futures API access OK: {response.json().get('serverTime')}")
+          PY
 
       - name: Push Binance stock contract signals
         shell: bash
