@@ -64,7 +64,8 @@ Binance Futures 可能对 GitHub-hosted runner 所在机房返回 HTTP 451，导
 1. 进入 GitHub 仓库 `Settings` -> `Actions` -> `Runners` -> `New self-hosted runner`。
 2. 选择 Windows x64，按页面给出的 PowerShell 命令下载并配置 runner。
 3. 配置 runner 时添加标签：`binance-futures`。最终 workflow 匹配条件是 `[self-hosted, windows, x64, binance-futures]`。
-4. 在 Windows PowerShell 里先确认 Binance Futures 可访问：
+4. workflow 使用 Windows 系统自带的 `powershell` 执行命令，不要求额外安装 PowerShell 7 / `pwsh`。
+5. 在 Windows PowerShell 里先确认 Binance Futures 可访问：
 
    ```powershell
    Invoke-RestMethod "https://fapi.binance.com/fapi/v1/time"
@@ -72,7 +73,7 @@ Binance Futures 可能对 GitHub-hosted runner 所在机房返回 HTTP 451，导
    Invoke-RestMethod "https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=SNDKUSDT"
    ```
 
-5. 将 runner 安装成 Windows 服务并启动，确保电脑重启后仍会接单：
+6. 将 runner 安装成 Windows 服务并启动，确保电脑重启后仍会接单：
 
    ```powershell
    .\svc.cmd install

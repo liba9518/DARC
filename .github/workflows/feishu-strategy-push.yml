@@ -95,7 +95,7 @@ jobs:
             binance-contract-sim-state-
 
       - name: Verify Feishu webhook secret
-        shell: pwsh
+        shell: powershell
         run: |
           if ([string]::IsNullOrWhiteSpace($env:FEISHU_WEBHOOK_URL)) {
             Write-Error "FEISHU_WEBHOOK_URL is required. Add it to GitHub Actions secrets."
@@ -103,12 +103,12 @@ jobs:
           }
 
       - name: Verify Binance Futures access
-        shell: pwsh
+        shell: powershell
         run: |
           python -c "import os, requests; base_url=os.environ.get('BINANCE_FUTURES_BASE_URL','https://fapi.binance.com').rstrip('/'); response=requests.get(base_url + '/fapi/v1/time', timeout=10); response.raise_for_status(); print('Binance Futures API access OK: ' + str(response.json().get('serverTime')))"
 
       - name: Push Binance stock contract signals
-        shell: pwsh
+        shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
 
