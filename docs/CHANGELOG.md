@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [改进] Binance 股票合约 Feishu workflow 改为运行在带 `binance-futures` 标签的 Linux x64 self-hosted runner 上，便于部署到 DigitalOcean / Ubuntu VPS 后在本地电脑关机时继续自动推送。
 - [修复] Binance 股票合约 Feishu workflow 在 Windows self-hosted runner 上改用系统自带 PowerShell，避免未安装 PowerShell 7 时 `pwsh: command not found`。
 - [修复] Binance 股票合约 Feishu workflow 改为安装最小运行依赖，并让 Binance 抓取/推送脚本脱离旧股票卡片依赖，避免 Windows self-hosted runner 安装全量 requirements 时因无关包失败。
 - [改进] Binance 股票合约 Feishu workflow 改为运行在带 `binance-futures` 标签的 self-hosted Windows x64 runner，并新增 Binance Futures 访问预检，避免 GitHub-hosted runner 被 451 拦截后静默无推送。

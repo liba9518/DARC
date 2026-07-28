@@ -147,3 +147,5 @@ data/paper_trade_state.json
 # 当前状态：仅推送 Binance 股票合约信号
 
 当前 `Feishu strategy push` 云端机器人已经收敛为只抓取并推送 Binance 股票合约 / TradFi equity perpetual 多空信号，不扫描 BTC、ETH、SOL 等加密货币合约。旧的美股 / 韩股普通股票盘前卡、收盘复盘卡、盘中监控不再由 `.github/workflows/feishu-strategy-push.yml` 触发。合约推送入口见 `docs/binance-contract-data.md`。
+
+当前 Binance 股票合约 workflow 运行在带 `binance-futures` 标签的 Linux x64 self-hosted runner 上。推荐把 runner 安装成 VPS 的 systemd 服务；这样本地 Windows 电脑关机、休眠或断网时，DigitalOcean / Ubuntu VPS 仍可按计划接收 GitHub Actions 任务并推送飞书。

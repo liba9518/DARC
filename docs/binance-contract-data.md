@@ -55,33 +55,33 @@ BINANCE_FUTURES_BASE_URL=https://fapi.binance.com
 
 ## GitHub Actions 自托管 runner
 
-Binance Futures 可能对 GitHub-hosted runner 所在机房返回 HTTP 451，导致云端 workflow 成功执行但抓不到任何合约行情。当前 `.github/workflows/feishu-strategy-push.yml` 已固定运行在带有 `binance-futures` 标签的 Windows x64 self-hosted runner 上。
+Binance Futures 可能对 GitHub-hosted runner 所在机房返回 HTTP 451，导致云端 workflow 成功执行但抓不到任何合约行情。当前 `.github/workflows/feishu-strategy-push.yml` 已固定运行在带有 `binance-futures` 标签的 Linux x64 self-hosted runner 上，推荐部署到可访问 `fapi.binance.com` 的 VPS（例如 Ubuntu 24.04 DigitalOcean Droplet）。
 
-该 workflow 只安装 Binance 信号推送所需的最小依赖 `requests` 和 `python-dotenv`，避免在 Windows runner 上安装全量 `requirements.txt` 时被旧股票分析链路的无关依赖拖挂。
+该 workflow 只安装 Binance 信号推送所需的最小依赖 `requests` 和 `python-dotenv`，避免安装全量 `requirements.txt` 时被旧股票分析链路的无关依赖拖挂。
 
-如果本地 Windows 电脑已经可以访问 `https://fapi.binance.com/fapi/v1/time`、`MUUSDT` 和 `SNDKUSDT` ticker，可以直接把这台 Windows 电脑注册为仓库级 runner：
+如果 VPS 已经可以访问 `https://fapi.binance.com/fapi/v1/time`、`MUUSDT` 和 `SNDKUSDT` ticker，可以把这台 VPS 注册为仓库级 runner：
 
 1. 进入 GitHub 仓库 `Settings` -> `Actions` -> `Runners` -> `New self-hosted runner`。
-2. 选择 Windows x64，按页面给出的 PowerShell 命令下载并配置 runner。
-3. 配置 runner 时添加标签：`binance-futures`。最终 workflow 匹配条件是 `[self-hosted, windows, x64, binance-futures]`。
-4. workflow 使用 Windows 系统自带的 `powershell` 执行命令，不要求额外安装 PowerShell 7 / `pwsh`。
-5. 在 Windows PowerShell 里先确认 Binance Futures 可访问：
+2. 选择 Linux x64，按页面给出的 bash 命令下载并配置 runner。
+3. 配置 runner 时添加标签：`binance-futures`。最终 workflow 匹配条件是 `[self-hosted, linux, x64, binance-futures]`。
+4. workflow 使用 Linux runner 默认的 `bash` 执行命令，不依赖 Windows PowerShell 或 PowerShell 7 / `pwsh`。
+5. 在 VPS 控制台里先确认 Binance Futures 可访问：
 
-   ```powershell
-   Invoke-RestMethod "https://fapi.binance.com/fapi/v1/time"
-   Invoke-RestMethod "https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=MUUSDT"
-   Invoke-RestMethod "https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=SNDKUSDT"
+   ```bash
+   curl -sS "https://fapi.binance.com/fapi/v1/time"
+   curl -sS "https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=MUUSDT"
+   curl -sS "https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=SNDKUSDT"
    ```
 
-6. 将 runner 安装成 Windows 服务并启动，确保电脑重启后仍会接单：
+6. 将 runner 安装成 Linux systemd 服务并启动，确保 VPS 重启后仍会接单：
 
-   ```powershell
-   .\svc.cmd install
-   .\svc.cmd start
-   .\svc.cmd status
+   ```bash
+   sudo ./svc.sh install
+   sudo ./svc.sh start
+   sudo ./svc.sh status
    ```
 
-如果这台 Windows 电脑关机、休眠、断网，或者 runner 服务没有运行，workflow 会在 GitHub Actions 等待可用 runner。若未来改用 VPS，可把 workflow 的 runner 标签改回对应平台，例如 `[self-hosted, linux, x64, binance-futures]`。
+如果 VPS 关机、断网，或者 runner 服务没有运行，workflow 会在 GitHub Actions 等待可用 runner。若临时想切回本地 Windows 电脑，可把 workflow 的 runner 标签改成对应平台，例如 `[self-hosted, windows, x64, binance-futures]`，并把运行步骤同步改回 PowerShell 兼容写法。
 
 ## 当前抓取字段
 
