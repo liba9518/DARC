@@ -84,6 +84,7 @@ class BinanceContractSnapshot:
     open_interest_change_pct: float | None = None
     taker_buy_sell_ratio: float | None = None
     taker_buy_sell_buy_ratio: float | None = None
+    mark_index_deviation_pct: float | None = None
 
 
 def _float(value: Any, default: float = 0.0) -> float:
@@ -274,6 +275,16 @@ def _pct_change(first_value: float, last_value: float) -> float | None:
     return (last_value / first_value - 1) * 100
 
 
+MARK_INDEX_DEVIATION_WARN_PCT = 0.3
+MARK_INDEX_DEVIATION_BLOCK_PCT = 0.8
+
+
+def mark_index_deviation_pct(mark_price: float, index_price: float) -> float | None:
+    if mark_price <= 0 or index_price <= 0:
+        return None
+    return (mark_price / index_price - 1) * 100
+
+
 def open_interest_metrics(
     base_url: str,
     symbol: str,
@@ -360,6 +371,7 @@ def classify_contract_signal(
     last_funding_rate: float | None,
     open_interest_change_pct: float | None = None,
     taker_buy_sell_buy_ratio: float | None = None,
+    mark_index_deviation_pct: float | None = None,
 ) -> tuple[str, float]:
     funding = last_funding_rate or 0.0
     momentum_score = price_change_pct_24h * 0.4 + kline_return_pct * 0.6
@@ -375,10 +387,27 @@ def classify_contract_signal(
             oi_score = -oi_magnitude if oi_change > 0 else oi_magnitude * 0.5
     funding_penalty = abs(funding) * 10_000
     score = momentum_score + flow_score + oi_score - funding_penalty * 0.15
+    deviation_abs = abs(mark_index_deviation_pct or 0.0)
+    if deviation_abs > MARK_INDEX_DEVIATION_WARN_PCT:
+        deviation_penalty = (deviation_abs - MARK_INDEX_DEVIATION_WARN_PCT) * 6
+        score = score - deviation_penalty if score >= 0 else score + deviation_penalty
     oi_not_exhausting = open_interest_change_pct is None or open_interest_change_pct >= -2.0
-    if kline_return_pct >= 1.0 and price_change_pct_24h >= 0 and active_buy_ratio >= 0.52 and oi_not_exhausting:
+    price_aligned = mark_index_deviation_pct is None or deviation_abs <= MARK_INDEX_DEVIATION_BLOCK_PCT
+    if (
+        kline_return_pct >= 1.0
+        and price_change_pct_24h >= 0
+        and active_buy_ratio >= 0.52
+        and oi_not_exhausting
+        and price_aligned
+    ):
         return "long_watch", round(score, 2)
-    if kline_return_pct <= -1.0 and price_change_pct_24h <= 0 and active_buy_ratio <= 0.48 and oi_not_exhausting:
+    if (
+        kline_return_pct <= -1.0
+        and price_change_pct_24h <= 0
+        and active_buy_ratio <= 0.48
+        and oi_not_exhausting
+        and price_aligned
+    ):
         return "short_watch", round(score, 2)
     return "neutral", round(score, 2)
 
@@ -405,6 +434,9 @@ def fetch_contract_snapshot(
     oi_metrics = open_interest_metrics(base_url, symbol, interval=interval, limit=limit, timeout=timeout)
     taker_flow_metrics = taker_buy_sell_metrics(base_url, symbol, interval=interval, limit=limit, timeout=timeout)
     funding_rate = _float(premium.get("lastFundingRate"), 0.0) if isinstance(premium, dict) else None
+    mark_price = _float(premium.get("markPrice")) if isinstance(premium, dict) else 0.0
+    index_price = _float(premium.get("indexPrice")) if isinstance(premium, dict) else 0.0
+    deviation_pct = mark_index_deviation_pct(mark_price, index_price)
     price_change_pct = _float(ticker.get("priceChangePercent"))
     signal, signal_score = classify_contract_signal(
         price_change_pct_24h=price_change_pct,
@@ -413,13 +445,14 @@ def fetch_contract_snapshot(
         last_funding_rate=funding_rate,
         open_interest_change_pct=oi_metrics["open_interest_change_pct"],
         taker_buy_sell_buy_ratio=taker_flow_metrics["taker_buy_sell_buy_ratio"],
+        mark_index_deviation_pct=deviation_pct,
     )
     return BinanceContractSnapshot(
         symbol=symbol,
         market=market,
         last_price=_float(ticker.get("lastPrice")),
-        mark_price=_float(premium.get("markPrice")) if isinstance(premium, dict) else 0.0,
-        index_price=_float(premium.get("indexPrice")) if isinstance(premium, dict) else 0.0,
+        mark_price=mark_price,
+        index_price=index_price,
         price_change_pct_24h=price_change_pct,
         high_price_24h=_float(ticker.get("highPrice")),
         low_price_24h=_float(ticker.get("lowPrice")),
@@ -439,6 +472,7 @@ def fetch_contract_snapshot(
         open_interest_change_pct=oi_metrics["open_interest_change_pct"],
         taker_buy_sell_ratio=taker_flow_metrics["taker_buy_sell_ratio"],
         taker_buy_sell_buy_ratio=taker_flow_metrics["taker_buy_sell_buy_ratio"],
+        mark_index_deviation_pct=deviation_pct,
     )
 
 
@@ -477,12 +511,13 @@ def render_text(snapshots: list[BinanceContractSnapshot], errors: list[str]) -> 
         funding_text = "n/a" if item.last_funding_rate is None else f"{item.last_funding_rate * 100:+.4f}%"
         oi_change_text = "n/a" if item.open_interest_change_pct is None else f"{item.open_interest_change_pct:+.2f}%"
         taker_flow_text = "n/a" if item.taker_buy_sell_ratio is None else f"{item.taker_buy_sell_ratio:.2f}"
+        deviation_text = "n/a" if item.mark_index_deviation_pct is None else f"{item.mark_index_deviation_pct:+.2f}%"
         lines.append(
             f"{index}. {item.symbol} [{item.contract_signal}] score={item.signal_score:+.2f} "
             f"last={item.last_price:g} mark={item.mark_price:g} "
             f"24h={item.price_change_pct_24h:+.2f}% kline={item.kline_return_pct:+.2f}% "
             f"buyRatio={item.taker_buy_quote_ratio:.2f} oiChange={oi_change_text} "
-            f"takerBuySell={taker_flow_text} funding={funding_text} "
+            f"takerBuySell={taker_flow_text} markIndexDev={deviation_text} funding={funding_text} "
             f"quoteVol={item.quote_volume_24h:,.0f}"
         )
     if errors:

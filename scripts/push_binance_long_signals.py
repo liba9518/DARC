@@ -167,6 +167,20 @@ def _capital_confirmation_line(item: BinanceContractSnapshot) -> str:
     )
 
 
+def _price_alignment_line(item: BinanceContractSnapshot) -> str:
+    deviation = item.mark_index_deviation_pct
+    deviation_text = _optional_pct(deviation)
+    if deviation is None:
+        status = "未取到偏离数据"
+    elif abs(deviation) > 0.8:
+        status = "偏离异常，已阻断触发"
+    elif abs(deviation) > 0.3:
+        status = "轻度偏离，已降级"
+    else:
+        status = "正常"
+    return f"价格保护：标记/指数偏离 **{deviation_text}**　{status}"
+
+
 def long_candidates(
     snapshots: list[BinanceContractSnapshot],
     *,
@@ -264,6 +278,7 @@ def build_contract_signal_card(
                         f"24h **{_pct(item.price_change_pct_24h)}**　短周期 **{_pct(item.kline_return_pct)}**　"
                         f"主动买入占比 **{_active_buy_ratio(item):.2f}**\n"
                         f"{_capital_confirmation_line(item)}\n"
+                        f"{_price_alignment_line(item)}\n"
                         f"持仓量 **{_optional_number(item.open_interest)}**　24h成交额 **{item.quote_volume_24h:,.0f}**"
                     ),
                 },
@@ -793,6 +808,7 @@ def _append_signal_section(
                         f"24h：**{_pct(item.price_change_pct_24h)}**　短周期：**{_pct(item.kline_return_pct)}**　"
                         f"主动买入占比：**{_active_buy_ratio(item):.2f}**\n"
                         f"{_capital_confirmation_line(item)}\n"
+                        f"{_price_alignment_line(item)}\n"
                         f"持仓量：**{_optional_number(item.open_interest)}**　24h成交额：**{item.quote_volume_24h:,.0f}**"
                     ),
                 },
@@ -904,6 +920,7 @@ def build_contract_signal_card(
                         f"24h：**{_pct(item.price_change_pct_24h)}**　短周期：**{_pct(item.kline_return_pct)}**　"
                         f"主动买入占比：**{_active_buy_ratio(item):.2f}**\n"
                         f"{_capital_confirmation_line(item)}\n"
+                        f"{_price_alignment_line(item)}\n"
                         f"持仓量：**{_optional_number(item.open_interest)}**　24h成交额：**{item.quote_volume_24h:,.0f}**"
                     ),
                 },

@@ -154,6 +154,38 @@ def test_classify_contract_signal_uses_oi_and_official_taker_flow_confirmation()
     assert exhausted_signal == "neutral"
 
 
+def test_classify_contract_signal_blocks_or_downgrades_mark_index_deviation():
+    normal_signal, normal_score = classify_contract_signal(
+        price_change_pct_24h=2.0,
+        kline_return_pct=1.4,
+        taker_buy_quote_ratio=0.56,
+        last_funding_rate=0.0001,
+        open_interest_change_pct=3.0,
+        mark_index_deviation_pct=0.2,
+    )
+    downgraded_signal, downgraded_score = classify_contract_signal(
+        price_change_pct_24h=2.0,
+        kline_return_pct=1.4,
+        taker_buy_quote_ratio=0.56,
+        last_funding_rate=0.0001,
+        open_interest_change_pct=3.0,
+        mark_index_deviation_pct=0.5,
+    )
+    blocked_signal, _ = classify_contract_signal(
+        price_change_pct_24h=2.0,
+        kline_return_pct=1.4,
+        taker_buy_quote_ratio=0.56,
+        last_funding_rate=0.0001,
+        open_interest_change_pct=3.0,
+        mark_index_deviation_pct=0.81,
+    )
+
+    assert normal_signal == "long_watch"
+    assert downgraded_signal == "long_watch"
+    assert downgraded_score < normal_score
+    assert blocked_signal == "neutral"
+
+
 def test_taker_buy_sell_metrics_calculates_aggregate_buy_ratio(monkeypatch):
     def fake_optional_request_json(*args, **kwargs):
         return [
