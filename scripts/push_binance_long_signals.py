@@ -344,14 +344,14 @@ def _trade_plan_values(item: BinanceContractSnapshot) -> dict[str, Any] | None:
         risk = base - stop
         tp1 = base + risk
         tp2 = base + risk * 2
-        invalidation = "15m 收盘跌破止损，或主动买入占比跌回 0.50 以下。"
+        invalidation = "1h 收盘跌破止损，或主动买入占比跌回 0.50 以下。"
         direction = "long"
     else:
         stop = base * (1 + risk_pct / 100)
         risk = stop - base
         tp1 = max(0.0, base - risk)
         tp2 = max(0.0, base - risk * 2)
-        invalidation = "15m 收盘突破止损，或主动买入占比回到 0.50 以上。"
+        invalidation = "1h 收盘突破止损，或主动买入占比回到 0.50 以上。"
         direction = "short"
     return {
         "direction": direction,

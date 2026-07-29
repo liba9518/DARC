@@ -35,8 +35,8 @@ DEFAULT_STOCK_SYMBOL_ALIASES = {
     "SNDK": "SNDKUSDT",
 }
 DEFAULT_USDM_BASE_URL = "https://fapi.binance.com"
-DEFAULT_INTERVAL = "15m"
-DEFAULT_LIMIT = 96
+DEFAULT_INTERVAL = "1h"
+DEFAULT_LIMIT = 24
 
 
 def configure_console_encoding() -> None:
