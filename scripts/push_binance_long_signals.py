@@ -989,7 +989,7 @@ def main() -> int:
     parser.add_argument(
         "--min-score",
         type=float,
-        default=float(os.getenv("BINANCE_SIGNAL_MIN_SCORE", os.getenv("BINANCE_LONG_SIGNAL_MIN_SCORE", "0"))),
+        default=float(os.getenv("BINANCE_SIGNAL_MIN_SCORE", os.getenv("BINANCE_LONG_SIGNAL_MIN_SCORE", "2"))),
     )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(

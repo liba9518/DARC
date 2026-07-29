@@ -66,7 +66,7 @@ def _run_binance_contract_signals() -> dict[str, Any]:
     market = os.getenv("BINANCE_CONTRACT_MARKET", "usdm")
     symbols = os.getenv("BINANCE_CONTRACT_SYMBOLS") or None
     side = os.getenv("BINANCE_CONTRACT_SIGNAL_SIDE", "both")
-    min_score = float(os.getenv("BINANCE_SIGNAL_MIN_SCORE", os.getenv("BINANCE_LONG_SIGNAL_MIN_SCORE", "0")))
+    min_score = float(os.getenv("BINANCE_SIGNAL_MIN_SCORE", os.getenv("BINANCE_LONG_SIGNAL_MIN_SCORE", "2")))
     return push_contract_signals(
         market=market,
         symbols=symbols,

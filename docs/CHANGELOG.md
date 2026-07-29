@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [改进] Binance 股票合约信号默认池收敛为单只股票代币合约，并将默认信号分数门槛提高到 2，减少 ETF/指数类和弱信号推送。
+
 - [改进] Binance 股票合约飞书卡片按开多/开空分区展示，每边最多精选 3 支，并补充分数解释、方向逻辑和模拟胜率说明。
 - [修复] Binance 股票合约 Feishu workflow 在 Windows self-hosted runner 上改用系统自带 PowerShell，避免未安装 PowerShell 7 时 `pwsh: command not found`。
 - [修复] Binance 股票合约 Feishu workflow 改为安装最小运行依赖，并让 Binance 抓取/推送脚本脱离旧股票卡片依赖，避免 Windows self-hosted runner 安装全量 requirements 时因无关包失败。
