@@ -200,10 +200,10 @@ def test_contract_signal_card_includes_trade_plan_for_long_and_short():
     assert "AAPLUSDT" in text
     assert "开多精选" in text
     assert "开空精选" in text
-    assert "分数怎么看" in text
+    assert "信号强度怎么看" in text
     assert "做多逻辑" in text
     assert "做空逻辑" in text
-    assert "分数含义" in text
+    assert "信号强度含义" in text
     assert "模拟胜率" in text
     assert "参考入场" in text
     assert "止损" in text

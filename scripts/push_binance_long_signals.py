@@ -200,7 +200,7 @@ def build_contract_signal_card(
                 "tag": "lark_md",
                 "content": (
                     f"**结论：** {conclusion}\n"
-                    f"**筛选：** Binance EQUITY / TRADIFI_PERPETUAL，side=`{side}`，`long_watch`/`short_watch` + 分数阈值 + 主动买卖结构\n"
+                    f"**筛选：** Binance EQUITY / TRADIFI_PERPETUAL，side=`{side}`，`long_watch`/`short_watch` + 信号强度门槛 + 主动买卖结构\n"
                     f"**周期：** {interval} × {limit} 根K线　**生成：** {now_text}"
                 ),
             },
@@ -229,7 +229,7 @@ def build_contract_signal_card(
                 "text": {
                     "tag": "lark_md",
                     "content": (
-                        f"**{index}. {item.symbol}｜{label}**　评分 **{item.signal_score:+.2f}**\n"
+                        f"**{index}. {item.symbol}｜{label}**　信号强度 **{_signal_strength_text(item.signal_score)}**\n"
                         f"最新 **{item.last_price:g}**　标记 **{item.mark_price:g}**　指数 **{item.index_price:g}**\n"
                         f"24h **{_pct(item.price_change_pct_24h)}**　短周期 **{_pct(item.kline_return_pct)}**　"
                         f"主动买入占比 **{item.taker_buy_quote_ratio:.2f}**\n"
@@ -634,10 +634,26 @@ def _sim_events_line(simulation: dict[str, Any] | None) -> str:
     return "模拟变动：" + "；".join(parts) + "。"
 
 
+def _signal_strength_label(score: float) -> str:
+    if score >= 8:
+        return "强多"
+    if score >= 2:
+        return "偏多"
+    if score <= -8:
+        return "强空"
+    if score <= -2:
+        return "偏空"
+    return "观望"
+
+
+def _signal_strength_text(score: float) -> str:
+    return f"{score:+.2f}（{_signal_strength_label(score)}）"
+
+
 def _score_explanation() -> str:
     return (
-        "分数怎么看：正分越高，说明做多条件越集中；负分越低，说明做空条件越集中；"
-        "接近 0 代表方向不明显。分数不是胜率，也不是下单命令，只用于排序优先级。"
+        "信号强度怎么看：≥+8 强多；+2 到 +8 以下偏多；-2 到 +2 观望；"
+        "-8 以上到 -2 偏空；≤-8 强空。信号强度只用于排序，不等于胜率，也不是自动下单命令。"
     )
 
 
@@ -654,18 +670,12 @@ def _direction_logic_text(direction: str) -> str:
 
 
 def _score_meaning(item: BinanceContractSnapshot) -> str:
-    strength = abs(item.signal_score)
-    if strength >= 5:
-        level = "强"
-    elif strength >= 2:
-        level = "中等"
-    else:
-        level = "轻微"
+    strength_label = _signal_strength_label(item.signal_score)
     if item.contract_signal == "short_watch":
-        return f"分数含义：偏空{level}信号；负分绝对值越大，空头条件越集中。"
+        return f"信号强度含义：{strength_label}，空头条件更集中；用于排序，不等于胜率。"
     if item.contract_signal == "long_watch":
-        return f"分数含义：偏多{level}信号；正分越高，多头条件越集中。"
-    return "分数含义：方向不明显，仅作候选池参考。"
+        return f"信号强度含义：{strength_label}，多头条件更集中；用于排序，不等于胜率。"
+    return f"信号强度含义：{strength_label}，方向不明显，仅作候选池参考。"
 
 
 def _rank_long_signal(item: BinanceContractSnapshot) -> tuple[float, float, str]:
@@ -743,7 +753,7 @@ def _append_signal_section(
                     "tag": "lark_md",
                     "content": (
                         f"**{index}. 合约：{item.symbol}**\n"
-                        f"方向：**{label}**　评分：**{item.signal_score:+.2f}**\n"
+                        f"方向：**{label}**　信号强度：**{_signal_strength_text(item.signal_score)}**\n"
                         f"{_score_meaning(item)}\n"
                         f"{plan_line}\n"
                         f"{sim_order_line}\n"
@@ -797,7 +807,7 @@ def build_contract_signal_card(
                 "tag": "lark_md",
                 "content": (
                     f"**结论：** {conclusion}\n"
-                    f"**筛选：** 只扫描 Binance 股票代币合约；{_side_label(side)}；按价格动量、分数阈值、主动买卖结构判断。\n"
+                    f"**筛选：** 只扫描 Binance 股票代币合约；{_side_label(side)}；按价格动量、信号强度门槛、主动买卖结构判断。\n"
                     f"**{_score_explanation()}**\n"
                     f"**周期：** {interval} × {limit} 根K线　**生成：** {now_text}\n"
                     f"**{_sim_stats_line(simulation)}**\n"
@@ -853,7 +863,7 @@ def build_contract_signal_card(
                     "tag": "lark_md",
                     "content": (
                         f"**{index}. 合约：{item.symbol}**\n"
-                        f"状态：**{label}**　评分：**{item.signal_score:+.2f}**\n"
+                        f"状态：**{label}**　信号强度：**{_signal_strength_text(item.signal_score)}**\n"
                         f"{_score_meaning(item)}\n"
                         f"{plan_line}\n"
                         f"{sim_order_line}\n"
