@@ -122,6 +122,59 @@ def test_classify_contract_signal_detects_long_and_short_watch():
     assert neutral_signal == "neutral"
 
 
+def test_classify_contract_signal_uses_oi_and_official_taker_flow_confirmation():
+    long_signal, long_score = classify_contract_signal(
+        price_change_pct_24h=2.0,
+        kline_return_pct=1.4,
+        taker_buy_quote_ratio=0.49,
+        last_funding_rate=0.0001,
+        open_interest_change_pct=3.0,
+        taker_buy_sell_buy_ratio=0.56,
+    )
+    short_signal, short_score = classify_contract_signal(
+        price_change_pct_24h=-2.0,
+        kline_return_pct=-1.4,
+        taker_buy_quote_ratio=0.51,
+        last_funding_rate=-0.0001,
+        open_interest_change_pct=3.0,
+        taker_buy_sell_buy_ratio=0.44,
+    )
+    exhausted_signal, _ = classify_contract_signal(
+        price_change_pct_24h=2.0,
+        kline_return_pct=1.4,
+        taker_buy_quote_ratio=0.56,
+        last_funding_rate=0.0001,
+        open_interest_change_pct=-3.0,
+    )
+
+    assert long_signal == "long_watch"
+    assert long_score > 0
+    assert short_signal == "short_watch"
+    assert short_score < 0
+    assert exhausted_signal == "neutral"
+
+
+def test_taker_buy_sell_metrics_calculates_aggregate_buy_ratio(monkeypatch):
+    def fake_optional_request_json(*args, **kwargs):
+        return [
+            {"buyVol": "30", "sellVol": "20", "buySellRatio": "1.5"},
+            {"buyVol": "70", "sellVol": "30", "buySellRatio": "2.3333"},
+        ]
+
+    monkeypatch.setattr(contract_data, "optional_request_json", fake_optional_request_json)
+
+    metrics = contract_data.taker_buy_sell_metrics(
+        "https://fapi.binance.com",
+        "MUUSDT",
+        interval="1h",
+        limit=2,
+        timeout=10,
+    )
+
+    assert round(metrics["taker_buy_sell_ratio"], 2) == 2.0
+    assert round(metrics["taker_buy_sell_buy_ratio"], 2) == 0.67
+
+
 def _snapshot(
     symbol: str,
     signal: str,

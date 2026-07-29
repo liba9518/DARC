@@ -137,6 +137,36 @@ def _funding(value: float | None) -> str:
     return f"{value * 100:+.4f}%"
 
 
+def _optional_pct(value: float | None) -> str:
+    if value is None:
+        return "n/a"
+    return f"{value:+.2f}%"
+
+
+def _optional_ratio(value: float | None) -> str:
+    if value is None:
+        return "n/a"
+    return f"{value:.2f}"
+
+
+def _optional_number(value: float | None) -> str:
+    if value is None:
+        return "n/a"
+    return f"{value:,.0f}"
+
+
+def _active_buy_ratio(item: BinanceContractSnapshot) -> float:
+    return item.taker_buy_sell_buy_ratio if item.taker_buy_sell_buy_ratio is not None else item.taker_buy_quote_ratio
+
+
+def _capital_confirmation_line(item: BinanceContractSnapshot) -> str:
+    return (
+        f"资金确认：OI变化 **{_optional_pct(item.open_interest_change_pct)}**　"
+        f"主动买卖比 **{_optional_ratio(item.taker_buy_sell_ratio)}**　"
+        f"资金费率 **{_funding(item.last_funding_rate)}**"
+    )
+
+
 def long_candidates(
     snapshots: list[BinanceContractSnapshot],
     *,
@@ -200,7 +230,7 @@ def build_contract_signal_card(
                 "tag": "lark_md",
                 "content": (
                     f"**结论：** {conclusion}\n"
-                    f"**筛选：** Binance EQUITY / TRADIFI_PERPETUAL，side=`{side}`，`long_watch`/`short_watch` + 信号强度门槛 + 主动买卖结构\n"
+                    f"**筛选：** Binance EQUITY / TRADIFI_PERPETUAL，side=`{side}`，`long_watch`/`short_watch` + OI变化 + 资金费率 + 主动买卖结构\n"
                     f"**周期：** {interval} × {limit} 根K线　**生成：** {now_text}"
                 ),
             },
@@ -232,8 +262,9 @@ def build_contract_signal_card(
                         f"**{index}. {item.symbol}｜{label}**　信号强度 **{_signal_strength_text(item.signal_score)}**\n"
                         f"最新 **{item.last_price:g}**　标记 **{item.mark_price:g}**　指数 **{item.index_price:g}**\n"
                         f"24h **{_pct(item.price_change_pct_24h)}**　短周期 **{_pct(item.kline_return_pct)}**　"
-                        f"主动买入占比 **{item.taker_buy_quote_ratio:.2f}**\n"
-                        f"资金费率 **{_funding(item.last_funding_rate)}**　24h成交额 **{item.quote_volume_24h:,.0f}**"
+                        f"主动买入占比 **{_active_buy_ratio(item):.2f}**\n"
+                        f"{_capital_confirmation_line(item)}\n"
+                        f"持仓量 **{_optional_number(item.open_interest)}**　24h成交额 **{item.quote_volume_24h:,.0f}**"
                     ),
                 },
             }
@@ -660,12 +691,12 @@ def _score_explanation() -> str:
 def _direction_logic_text(direction: str) -> str:
     if direction == "long":
         return (
-            "做多逻辑：短周期价格动量转强，主动买入占比偏高，标记价/指数价没有明显失真，"
-            "资金费率风险可控，优先找顺势突破或回踩承接。"
+            "做多逻辑：1小时价格转强，主动买入占比偏高，OI没有明显萎缩或正在放大，"
+            "说明更像新增多头进场，而不是单纯反弹；资金费率不过热时优先关注突破或回踩承接。"
         )
     return (
-        "做空逻辑：短周期价格动量转弱，主动买入不足或卖压占优，反弹承压，"
-        "标记价/指数价没有明显失真，资金费率风险可控。"
+        "做空逻辑：1小时价格转弱，主动卖出占优，OI没有明显萎缩或正在放大，"
+        "说明更像新增空头压制，而不是单纯多头止盈；资金费率不过热时优先关注反弹承压。"
     )
 
 
@@ -760,8 +791,9 @@ def _append_signal_section(
                         f"{invalidation_line}\n"
                         f"最新：**{item.last_price:g}**　标记：**{item.mark_price:g}**　指数：**{item.index_price:g}**\n"
                         f"24h：**{_pct(item.price_change_pct_24h)}**　短周期：**{_pct(item.kline_return_pct)}**　"
-                        f"主动买入占比：**{item.taker_buy_quote_ratio:.2f}**\n"
-                        f"资金费率：**{_funding(item.last_funding_rate)}**　24h成交额：**{item.quote_volume_24h:,.0f}**"
+                        f"主动买入占比：**{_active_buy_ratio(item):.2f}**\n"
+                        f"{_capital_confirmation_line(item)}\n"
+                        f"持仓量：**{_optional_number(item.open_interest)}**　24h成交额：**{item.quote_volume_24h:,.0f}**"
                     ),
                 },
             }
@@ -807,7 +839,7 @@ def build_contract_signal_card(
                 "tag": "lark_md",
                 "content": (
                     f"**结论：** {conclusion}\n"
-                    f"**筛选：** 只扫描 Binance 股票代币合约；{_side_label(side)}；按价格动量、信号强度门槛、主动买卖结构判断。\n"
+                    f"**筛选：** 只扫描 Binance 股票代币合约；{_side_label(side)}；按1小时价格动量、OI变化、资金费率和主动买卖结构判断。\n"
                     f"**{_score_explanation()}**\n"
                     f"**周期：** {interval} × {limit} 根K线　**生成：** {now_text}\n"
                     f"**{_sim_stats_line(simulation)}**\n"
@@ -870,8 +902,9 @@ def build_contract_signal_card(
                         f"{invalidation_line}\n"
                         f"最新：**{item.last_price:g}**　标记：**{item.mark_price:g}**　指数：**{item.index_price:g}**\n"
                         f"24h：**{_pct(item.price_change_pct_24h)}**　短周期：**{_pct(item.kline_return_pct)}**　"
-                        f"主动买入占比：**{item.taker_buy_quote_ratio:.2f}**\n"
-                        f"资金费率：**{_funding(item.last_funding_rate)}**　24h成交额：**{item.quote_volume_24h:,.0f}**"
+                        f"主动买入占比：**{_active_buy_ratio(item):.2f}**\n"
+                        f"{_capital_confirmation_line(item)}\n"
+                        f"持仓量：**{_optional_number(item.open_interest)}**　24h成交额：**{item.quote_volume_24h:,.0f}**"
                     ),
                 },
             }

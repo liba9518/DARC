@@ -64,7 +64,7 @@ BINANCE_FUTURES_BASE_URL=https://fapi.binance.com
 - ≤ -8：强空，做空条件高度集中。
 - 信号强度只用于排序优先级，不等于胜率，也不是自动下单命令。
 
-做多逻辑主要看短周期价格动量转强、主动买入占比偏高、标记价/指数价没有明显失真、资金费率风险可控；做空逻辑主要看短周期动量转弱、主动买入不足或卖压占优、反弹承压、资金费率风险可控。
+做多逻辑主要看 1 小时价格动量转强、官方 taker buy/sell 与 K 线主动买入占比偏多、OI 没有明显萎缩或正在放大、资金费率不过热；做空逻辑主要看 1 小时价格动量转弱、主动卖出占优、OI 没有明显萎缩或正在放大、资金费率风险可控。OI 放大配合方向动量，优先理解为新增仓位推动；价格动但 OI 明显萎缩，会被视为信号质量下降。
 
 卡片展示的胜率来自本地模拟开单账本：有已平仓样本时显示胜负笔数、模拟胜率、累计盈亏和当前持仓；样本不足时会明确提示“暂无已平仓样本”。该胜率只是当前规则的模拟记录，不代表未来收益保证。
 
@@ -104,10 +104,12 @@ Binance Futures 可能对 GitHub-hosted runner 所在机房返回 HTTP 451，导
 - 24h ticker：最新价、24h 涨跌幅、24h 高低价、成交额、成交笔数。
 - Premium index：标记价、指数价、最近资金费率、下一次资金费时间。
 - Kline：指定周期动量、区间振幅、主动买入成交额占比。
-- 合约信号：`long_watch` / `short_watch` / `neutral`，用于先把候选池按动量和主动买卖结构粗排，不代表自动下单。
+- Open interest：当前持仓量与指定周期 OI 变化，用来判断上涨/下跌是否有新增仓位跟随。
+- Taker buy/sell volume：Binance 官方主动买卖量，用来补强 K 线主动买入占比，减少单一成交口径误判。
+- 合约信号：`long_watch` / `short_watch` / `neutral`，用于先把候选池按动量、OI、资金费率和主动买卖结构粗排，不代表自动下单。
 
 ## 数据源边界
 
-Binance USDⓈ-M Futures 的 Kline 接口是 `/fapi/v1/klines`，24h ticker 是 `/fapi/v1/ticker/24hr`，标记价格 / 资金费率来自 `/fapi/v1/premiumIndex`。产品范围由 `/fapi/v1/exchangeInfo` 的 `EQUITY` / `TRADIFI_PERPETUAL` 字段约束。
+Binance USDⓈ-M Futures 的 Kline 接口是 `/fapi/v1/klines`，24h ticker 是 `/fapi/v1/ticker/24hr`，标记价格 / 资金费率来自 `/fapi/v1/premiumIndex`，当前持仓量来自 `/fapi/v1/openInterest`，历史 OI 和主动买卖量来自 `/futures/data/openInterestHist` 与 `/futures/data/takerBuySellVol`。产品范围由 `/fapi/v1/exchangeInfo` 的 `EQUITY` / `TRADIFI_PERPETUAL` 字段约束。
 
 Binance Academy 对这类产品的说明是：stock perpetual contracts / TradFi Perps 追踪传统金融资产，使用 USDT 结算，并提供杠杆交易。当前脚本只做行情信号，不做自动下单。

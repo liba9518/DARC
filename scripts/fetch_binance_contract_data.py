@@ -79,6 +79,11 @@ class BinanceContractSnapshot:
     contract_signal: str
     signal_score: float
     fetched_at: str
+    open_interest: float | None = None
+    open_interest_value: float | None = None
+    open_interest_change_pct: float | None = None
+    taker_buy_sell_ratio: float | None = None
+    taker_buy_sell_buy_ratio: float | None = None
 
 
 def _float(value: Any, default: float = 0.0) -> float:
@@ -161,6 +166,20 @@ def request_json(base_url: str, path: str, params: dict[str, Any], timeout: floa
     )
     response.raise_for_status()
     return response.json()
+
+
+def optional_request_json(base_url: str, path: str, params: dict[str, Any], timeout: float) -> Any | None:
+    """Fetch an optional signal source without breaking the whole scan.
+
+    OI and global taker-flow endpoints are used as confirmation layers. When
+    Binance rate-limits or temporarily rejects those endpoints, the strategy
+    should still be able to fall back to ticker/funding/kline data.
+    """
+
+    try:
+        return request_json(base_url, path, params, timeout)
+    except Exception:
+        return None
 
 
 def _env_flag(name: str, default: str = "true") -> bool:
@@ -249,21 +268,117 @@ def kline_metrics(klines: list[list[Any]]) -> dict[str, float]:
     }
 
 
+def _pct_change(first_value: float, last_value: float) -> float | None:
+    if first_value <= 0:
+        return None
+    return (last_value / first_value - 1) * 100
+
+
+def open_interest_metrics(
+    base_url: str,
+    symbol: str,
+    *,
+    interval: str,
+    limit: int,
+    timeout: float,
+) -> dict[str, float | None]:
+    current = optional_request_json(base_url, "/fapi/v1/openInterest", {"symbol": symbol}, timeout)
+    history = optional_request_json(
+        base_url,
+        "/futures/data/openInterestHist",
+        {
+            "pair": symbol,
+            "contractType": "PERPETUAL",
+            "period": interval,
+            "limit": max(2, min(500, limit)),
+        },
+        timeout,
+    )
+
+    open_interest = _float(current.get("openInterest")) if isinstance(current, dict) else None
+    open_interest_value: float | None = None
+    open_interest_change_pct: float | None = None
+    rows = history if isinstance(history, list) else []
+    if rows:
+        first_oi = _float(rows[0].get("sumOpenInterest"))
+        last_oi = _float(rows[-1].get("sumOpenInterest"))
+        open_interest_change_pct = _pct_change(first_oi, last_oi)
+        open_interest_value = _float(rows[-1].get("sumOpenInterestValue")) or None
+        if open_interest is None and last_oi > 0:
+            open_interest = last_oi
+
+    return {
+        "open_interest": open_interest,
+        "open_interest_value": open_interest_value,
+        "open_interest_change_pct": open_interest_change_pct,
+    }
+
+
+def taker_buy_sell_metrics(
+    base_url: str,
+    symbol: str,
+    *,
+    interval: str,
+    limit: int,
+    timeout: float,
+) -> dict[str, float | None]:
+    history = optional_request_json(
+        base_url,
+        "/futures/data/takerBuySellVol",
+        {
+            "pair": symbol,
+            "contractType": "PERPETUAL",
+            "period": interval,
+            "limit": max(2, min(500, limit)),
+        },
+        timeout,
+    )
+    rows = history if isinstance(history, list) else []
+    if not rows:
+        return {"taker_buy_sell_ratio": None, "taker_buy_sell_buy_ratio": None}
+
+    buy_volume = sum(_float(row.get("buyVol")) for row in rows if isinstance(row, dict))
+    sell_volume = sum(_float(row.get("sellVol")) for row in rows if isinstance(row, dict))
+    total_volume = buy_volume + sell_volume
+    ratio = buy_volume / sell_volume if sell_volume > 0 else None
+    buy_ratio = buy_volume / total_volume if total_volume > 0 else None
+
+    last_row = rows[-1] if isinstance(rows[-1], dict) else {}
+    if ratio is None:
+        ratio = _float(last_row.get("buySellRatio"), default=0.0) or None
+    if buy_ratio is None and ratio is not None and ratio > 0:
+        buy_ratio = ratio / (1 + ratio)
+
+    return {"taker_buy_sell_ratio": ratio, "taker_buy_sell_buy_ratio": buy_ratio}
+
+
 def classify_contract_signal(
     *,
     price_change_pct_24h: float,
     kline_return_pct: float,
     taker_buy_quote_ratio: float,
     last_funding_rate: float | None,
+    open_interest_change_pct: float | None = None,
+    taker_buy_sell_buy_ratio: float | None = None,
 ) -> tuple[str, float]:
     funding = last_funding_rate or 0.0
     momentum_score = price_change_pct_24h * 0.4 + kline_return_pct * 0.6
-    flow_score = (taker_buy_quote_ratio - 0.5) * 100
+    active_buy_ratio = taker_buy_sell_buy_ratio if taker_buy_sell_buy_ratio is not None else taker_buy_quote_ratio
+    flow_score = (active_buy_ratio - 0.5) * 100
+    oi_change = open_interest_change_pct if open_interest_change_pct is not None else 0.0
+    oi_score = 0.0
+    if oi_change:
+        oi_magnitude = min(abs(oi_change), 12.0)
+        if momentum_score > 0:
+            oi_score = oi_magnitude if oi_change > 0 else -oi_magnitude * 0.5
+        elif momentum_score < 0:
+            oi_score = -oi_magnitude if oi_change > 0 else oi_magnitude * 0.5
     funding_penalty = abs(funding) * 10_000
-    score = momentum_score + flow_score - funding_penalty * 0.15
-    if kline_return_pct >= 1.0 and price_change_pct_24h >= 0 and taker_buy_quote_ratio >= 0.52:
+    score = momentum_score + flow_score + oi_score - funding_penalty * 0.15
+    oi_not_exhausting = open_interest_change_pct is None or open_interest_change_pct >= -2.0
+    if kline_return_pct >= 1.0 and price_change_pct_24h >= 0 and active_buy_ratio >= 0.52 and oi_not_exhausting:
         return "long_watch", round(score, 2)
-    if kline_return_pct <= -1.0 and price_change_pct_24h <= 0 and taker_buy_quote_ratio <= 0.48:
+    if kline_return_pct <= -1.0 and price_change_pct_24h <= 0 and active_buy_ratio <= 0.48 and oi_not_exhausting:
         return "short_watch", round(score, 2)
     return "neutral", round(score, 2)
 
@@ -287,6 +402,8 @@ def fetch_contract_snapshot(
         timeout,
     )
     metrics = kline_metrics(klines if isinstance(klines, list) else [])
+    oi_metrics = open_interest_metrics(base_url, symbol, interval=interval, limit=limit, timeout=timeout)
+    taker_flow_metrics = taker_buy_sell_metrics(base_url, symbol, interval=interval, limit=limit, timeout=timeout)
     funding_rate = _float(premium.get("lastFundingRate"), 0.0) if isinstance(premium, dict) else None
     price_change_pct = _float(ticker.get("priceChangePercent"))
     signal, signal_score = classify_contract_signal(
@@ -294,6 +411,8 @@ def fetch_contract_snapshot(
         kline_return_pct=metrics["return_pct"],
         taker_buy_quote_ratio=metrics["taker_buy_quote_ratio"],
         last_funding_rate=funding_rate,
+        open_interest_change_pct=oi_metrics["open_interest_change_pct"],
+        taker_buy_sell_buy_ratio=taker_flow_metrics["taker_buy_sell_buy_ratio"],
     )
     return BinanceContractSnapshot(
         symbol=symbol,
@@ -315,6 +434,11 @@ def fetch_contract_snapshot(
         contract_signal=signal,
         signal_score=signal_score,
         fetched_at=datetime.now(timezone.utc).isoformat(),
+        open_interest=oi_metrics["open_interest"],
+        open_interest_value=oi_metrics["open_interest_value"],
+        open_interest_change_pct=oi_metrics["open_interest_change_pct"],
+        taker_buy_sell_ratio=taker_flow_metrics["taker_buy_sell_ratio"],
+        taker_buy_sell_buy_ratio=taker_flow_metrics["taker_buy_sell_buy_ratio"],
     )
 
 
@@ -351,11 +475,14 @@ def render_text(snapshots: list[BinanceContractSnapshot], errors: list[str]) -> 
         lines.append("- No contract data fetched.")
     for index, item in enumerate(snapshots, start=1):
         funding_text = "n/a" if item.last_funding_rate is None else f"{item.last_funding_rate * 100:+.4f}%"
+        oi_change_text = "n/a" if item.open_interest_change_pct is None else f"{item.open_interest_change_pct:+.2f}%"
+        taker_flow_text = "n/a" if item.taker_buy_sell_ratio is None else f"{item.taker_buy_sell_ratio:.2f}"
         lines.append(
             f"{index}. {item.symbol} [{item.contract_signal}] score={item.signal_score:+.2f} "
             f"last={item.last_price:g} mark={item.mark_price:g} "
             f"24h={item.price_change_pct_24h:+.2f}% kline={item.kline_return_pct:+.2f}% "
-            f"buyRatio={item.taker_buy_quote_ratio:.2f} funding={funding_text} "
+            f"buyRatio={item.taker_buy_quote_ratio:.2f} oiChange={oi_change_text} "
+            f"takerBuySell={taker_flow_text} funding={funding_text} "
             f"quoteVol={item.quote_volume_24h:,.0f}"
         )
     if errors:
