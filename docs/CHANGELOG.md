@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [改进] Binance 股票合约 Feishu workflow 兼容 Windows 本地电脑与 Linux VPS self-hosted runner，统一通过 `binance-futures` 标签接单并按运行系统选择对应命令。
 - [改进] Binance 股票合约信号新增标记价 / 指数价偏离保护，偏离过大时阻断触发、轻度偏离时降低信号强度，减少异常合约价格误推送。
 - [改进] Binance 股票合约信号接入 OI 变化、官方主动买卖量和资金费率确认，飞书卡片展示资金面确认项以加固多空判断。
 - [改进] Binance 股票合约信号默认改为 1 小时 K 线标准，使用 `1h × 24` 取样并将交易计划失效条件同步为 1h 收盘确认。

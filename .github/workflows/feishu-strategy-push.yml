@@ -42,9 +42,9 @@ concurrency:
 jobs:
   push:
     # Binance Futures returns HTTP 451 from many GitHub-hosted runner regions.
-    # Register a Windows x64 self-hosted runner on a machine that can access
-    # fapi.binance.com, and add the custom label `binance-futures`.
-    runs-on: [self-hosted, windows, x64, binance-futures]
+    # Register a self-hosted x64 runner on a Windows PC or Linux VPS that can
+    # access fapi.binance.com, and add the custom label `binance-futures`.
+    runs-on: [self-hosted, x64, binance-futures]
     timeout-minutes: 20
     env:
       TZ: Asia/Shanghai
@@ -84,7 +84,7 @@ jobs:
           python -m pip install requests python-dotenv
 
       - name: Prepare runtime directories
-        run: New-Item -ItemType Directory -Force -Path data, logs, reports | Out-Null
+        run: python -c "from pathlib import Path; [Path(path).mkdir(exist_ok=True) for path in ('data', 'logs', 'reports')]"
 
       - name: Restore Binance simulation state
         uses: actions/cache/restore@v4
@@ -95,19 +95,15 @@ jobs:
             binance-contract-sim-state-
 
       - name: Verify Feishu webhook secret
-        shell: powershell
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:FEISHU_WEBHOOK_URL)) {
-            Write-Error "FEISHU_WEBHOOK_URL is required. Add it to GitHub Actions secrets."
-            exit 1
-          }
+          python -c "import os, sys; ok=bool(os.environ.get('FEISHU_WEBHOOK_URL','').strip()); print('FEISHU_WEBHOOK_URL configured' if ok else 'FEISHU_WEBHOOK_URL is required. Add it to GitHub Actions secrets.'); sys.exit(0 if ok else 1)"
 
       - name: Verify Binance Futures access
-        shell: powershell
         run: |
           python -c "import os, requests; base_url=os.environ.get('BINANCE_FUTURES_BASE_URL','https://fapi.binance.com').rstrip('/'); response=requests.get(base_url + '/fapi/v1/time', timeout=10); response.raise_for_status(); print('Binance Futures API access OK: ' + str(response.json().get('serverTime')))"
 
-      - name: Push Binance stock contract signals
+      - name: Push Binance stock contract signals on Windows
+        if: runner.os == 'Windows'
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
@@ -143,6 +139,44 @@ jobs:
           }
 
           python @scriptArgs
+
+      - name: Push Binance stock contract signals on Linux
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          market="$BINANCE_CONTRACT_MARKET"
+          side="$BINANCE_CONTRACT_SIGNAL_SIDE"
+          symbols="$BINANCE_CONTRACT_SYMBOLS"
+          push_empty="false"
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            market="${{ inputs.market }}"
+            side="${{ inputs.side }}"
+            symbols="${{ inputs.symbols }}"
+            push_empty="${{ inputs.push_empty }}"
+          fi
+
+          script_args=(
+            "scripts/push_binance_long_signals.py"
+            "--market" "$market"
+            "--side" "$side"
+            "--interval" "$BINANCE_CONTRACT_INTERVAL"
+            "--limit" "$BINANCE_CONTRACT_KLINE_LIMIT"
+            "--timeout" "$BINANCE_CONTRACT_TIMEOUT_SEC"
+            "--min-score" "$BINANCE_SIGNAL_MIN_SCORE"
+            "--no-push-empty"
+          )
+
+          if [[ -n "${symbols// }" ]]; then
+            script_args+=("--symbols" "$symbols")
+          fi
+          if [[ "$push_empty" == "true" ]]; then
+            script_args+=("--push-empty")
+          fi
+
+          python "${script_args[@]}"
 
       - name: Save Binance simulation state
         if: always() && hashFiles('data/binance_contract_sim_state.json') != ''

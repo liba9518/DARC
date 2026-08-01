@@ -70,15 +70,15 @@ BINANCE_FUTURES_BASE_URL=https://fapi.binance.com
 
 ## GitHub Actions 自托管 runner
 
-Binance Futures 可能对 GitHub-hosted runner 所在机房返回 HTTP 451，导致云端 workflow 成功执行但抓不到任何合约行情。当前 `.github/workflows/feishu-strategy-push.yml` 已固定运行在带有 `binance-futures` 标签的 Windows x64 self-hosted runner 上。
+Binance Futures 可能对 GitHub-hosted runner 所在机房返回 HTTP 451，导致云端 workflow 成功执行但抓不到任何合约行情。当前 `.github/workflows/feishu-strategy-push.yml` 会运行在带有 `binance-futures` 标签的 x64 self-hosted runner 上，Windows 本地电脑和 Linux VPS 都可以接单。
 
-该 workflow 只安装 Binance 信号推送所需的最小依赖 `requests` 和 `python-dotenv`，避免在 Windows runner 上安装全量 `requirements.txt` 时被旧股票分析链路的无关依赖拖挂。
+该 workflow 只安装 Binance 信号推送所需的最小依赖 `requests` 和 `python-dotenv`，避免安装全量 `requirements.txt` 时被旧股票分析链路的无关依赖拖挂。运行匹配条件是 `[self-hosted, x64, binance-futures]`，GitHub runner 默认自带的 `Windows` / `Linux` 标签只用于在 workflow 内选择对应命令。
 
 如果本地 Windows 电脑已经可以访问 `https://fapi.binance.com/fapi/v1/time`、`MUUSDT` 和 `SNDKUSDT` ticker，可以直接把这台 Windows 电脑注册为仓库级 runner：
 
 1. 进入 GitHub 仓库 `Settings` -> `Actions` -> `Runners` -> `New self-hosted runner`。
 2. 选择 Windows x64，按页面给出的 PowerShell 命令下载并配置 runner。
-3. 配置 runner 时添加标签：`binance-futures`。最终 workflow 匹配条件是 `[self-hosted, windows, x64, binance-futures]`。
+3. 配置 runner 时添加标签：`binance-futures`。最终 workflow 匹配条件是 `[self-hosted, x64, binance-futures]`。
 4. workflow 使用 Windows 系统自带的 `powershell` 执行命令，不要求额外安装 PowerShell 7 / `pwsh`。
 5. 在 Windows PowerShell 里先确认 Binance Futures 可访问：
 
@@ -96,7 +96,39 @@ Binance Futures 可能对 GitHub-hosted runner 所在机房返回 HTTP 451，导
    .\svc.cmd status
    ```
 
-如果这台 Windows 电脑关机、休眠、断网，或者 runner 服务没有运行，workflow 会在 GitHub Actions 等待可用 runner。若未来改用 VPS，可把 workflow 的 runner 标签改回对应平台，例如 `[self-hosted, linux, x64, binance-futures]`。
+如果这台 Windows 电脑关机、休眠、断网，或者 runner 服务没有运行，workflow 会在 GitHub Actions 等待可用 runner。
+
+如果要换成 Linux VPS，推荐用独立普通用户运行 runner，不要把 token 写入仓库文件：
+
+1. 在 VPS 上先确认 Binance Futures 可访问：
+
+   ```bash
+   curl -sS https://fapi.binance.com/fapi/v1/time
+   curl -sS "https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=MUUSDT"
+   curl -sS "https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=SNDKUSDT"
+   ```
+
+2. 创建 runner 用户并切换过去：
+
+   ```bash
+   adduser actions
+   usermod -aG sudo actions
+   su - actions
+   ```
+
+3. 进入 GitHub 仓库 `Settings` -> `Actions` -> `Runners` -> `New self-hosted runner`，选择 Linux x64，复制页面给出的下载、解压和 `./config.sh` 命令。
+4. 配置 runner 时添加标签：`binance-futures`。runner 名称可以用 `do-binance-runner`，work folder 使用默认 `_work` 即可。
+5. 配置完成后安装并启动 systemd 服务：
+
+   ```bash
+   sudo ./svc.sh install actions
+   sudo ./svc.sh start
+   sudo ./svc.sh status
+   ```
+
+6. 回到 GitHub `Settings` -> `Actions` -> `Runners`，看到 Linux runner 状态为 `Idle` 后，手动运行 `Feishu Binance stock contract signals` workflow 做一次验证。
+
+Linux VPS 作为服务运行后，只要 Droplet 开机且网络正常，即使本地电脑关机，定时 workflow 也会继续推送。若 Windows 和 Linux runner 同时在线，GitHub 会选择任一满足 `[self-hosted, x64, binance-futures]` 的 runner 执行。
 
 ## 当前抓取字段
 
