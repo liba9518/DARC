@@ -540,7 +540,7 @@ def generate_market_selection(market: str) -> tuple[list[StockPick], list[str]]:
             market="us",
             count=count,
             minimum_liquidity=float(os.getenv("US_MIN_DOLLAR_VOLUME", "10000000")),
-            selection_profile="us_contract",
+            selection_profile="us_quality",
             include_reserves=0,
             eligible_only=True,
         )

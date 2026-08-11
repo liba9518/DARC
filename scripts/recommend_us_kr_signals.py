@@ -105,7 +105,7 @@ def select_signal_candidates(market: str, *, count: int | None = None) -> tuple[
         names=names,
         count=signal_count(market, count),
         minimum_liquidity=minimum_liquidity(market),
-        selection_profile="us_contract" if market == "us" else "standard",
+        selection_profile="us_quality" if market == "us" else "standard",
         include_reserves=0,
         eligible_only=True,
     )

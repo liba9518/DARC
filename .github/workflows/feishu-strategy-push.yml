@@ -3,20 +3,11 @@ name: Feishu Binance stock contract signals
 on:
   schedule:
     # Binance TradFi/equity perpetual contracts trade 24/7. The script pushes
-    # only when long/short conditions are triggered, so idle scans do not send
+    # only when selected long conditions are triggered, so idle scans do not send
     # Feishu cards.
     - cron: "*/15 * * * *"
   workflow_dispatch:
     inputs:
-      side:
-        description: "Signal side to scan and push"
-        required: true
-        default: "both"
-        type: choice
-        options:
-          - both
-          - long
-          - short
       market:
         description: "Binance stock contracts are USDT-M only"
         required: true
@@ -58,7 +49,7 @@ jobs:
       BINANCE_CONTRACT_INTERVAL: ${{ vars.BINANCE_CONTRACT_INTERVAL || '1h' }}
       BINANCE_CONTRACT_KLINE_LIMIT: ${{ vars.BINANCE_CONTRACT_KLINE_LIMIT || '24' }}
       BINANCE_CONTRACT_TIMEOUT_SEC: ${{ vars.BINANCE_CONTRACT_TIMEOUT_SEC || '10' }}
-      BINANCE_CONTRACT_SIGNAL_SIDE: ${{ vars.BINANCE_CONTRACT_SIGNAL_SIDE || 'both' }}
+      BINANCE_CONTRACT_SIGNAL_SIDE: "long"
       BINANCE_SIGNAL_MIN_SCORE: ${{ vars.BINANCE_SIGNAL_MIN_SCORE || '2' }}
       BINANCE_PUSH_EMPTY_LONG_STATUS: "false"
       BINANCE_FUTURES_BASE_URL: ${{ vars.BINANCE_FUTURES_BASE_URL || 'https://fapi.binance.com' }}
@@ -115,7 +106,6 @@ jobs:
 
           if ("${{ github.event_name }}" -eq "workflow_dispatch") {
             $market = "${{ inputs.market }}"
-            $side = "${{ inputs.side }}"
             $symbols = "${{ inputs.symbols }}"
             $pushEmpty = "${{ inputs.push_empty }}"
           }
@@ -153,7 +143,6 @@ jobs:
 
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             market="${{ inputs.market }}"
-            side="${{ inputs.side }}"
             symbols="${{ inputs.symbols }}"
             push_empty="${{ inputs.push_empty }}"
           fi

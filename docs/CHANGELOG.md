@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [改进] Binance 股票合约策略取消做空，仅推送精选多单，并以近期波动率、动量、OI、主动买入、资金费率和价格偏离量化区分“早期启动观察”与“确认多单”；观察阶段不模拟建仓。
+- [修复] 美股日线采集在 yfinance 会话限流时回退 Yahoo chart 端点，避免模拟跟单因同源会话异常整批无数据。
+- [改进] 美股推荐切换为质量优先筛选，要求趋势、相对强度、资金承接与风险指标共同确认，并保持不固定数量、无优质标的不推送。
+
 - [改进] Binance 股票合约 Feishu workflow 兼容 Windows 本地电脑与 Linux VPS self-hosted runner，统一通过 `binance-futures` 标签接单并按运行系统选择对应命令。
 - [改进] Binance 股票合约信号新增标记价 / 指数价偏离保护，偏离过大时阻断触发、轻度偏离时降低信号强度，减少异常合约价格误推送。
 - [改进] Binance 股票合约信号接入 OI 变化、官方主动买卖量和资金费率确认，飞书卡片展示资金面确认项以加固多空判断。

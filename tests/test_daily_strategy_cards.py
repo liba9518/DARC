@@ -71,6 +71,32 @@ def test_us_contract_profile_relaxes_trend_gate():
     assert relaxed.eligible
 
 
+def test_us_quality_profile_rejects_unconfirmed_rebound():
+    history = _contract_rebound_history()
+    relaxed = rank_history("TSLA", "TSLA", history, name="Tesla", selection_profile="us_contract")
+    quality = rank_history("TSLA", "TSLA", history, name="Tesla", selection_profile="us_quality")
+    assert relaxed is not None and quality is not None
+    assert relaxed.eligible
+    assert not quality.eligible
+
+
+def test_us_quality_profile_accepts_confirmed_high_quality_trend():
+    dates = pd.date_range("2026-01-01", periods=100, freq="B")
+    close = pd.Series(
+        [100 + index * 0.25 + (1 if index % 3 else -1) for index in range(100)],
+        index=dates,
+    )
+    history = pd.DataFrame(
+        {"Close": close, "Volume": [1_000_000] * 99 + [1_500_000]},
+        index=dates,
+    )
+    quality = rank_history("NVDA", "NVDA", history, name="NVIDIA", selection_profile="us_quality")
+    assert quality is not None
+    assert quality.eligible
+    assert quality.confidence_points >= 8
+    assert quality.capital_trace_score >= 58
+
+
 def test_market_pick_count_defaults(monkeypatch):
     monkeypatch.delenv("DAILY_CARD_PICK_COUNT", raising=False)
     monkeypatch.delenv("US_DAILY_CARD_PICK_COUNT", raising=False)

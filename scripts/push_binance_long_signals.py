@@ -1,4 +1,4 @@
-"""Push Binance stock perpetual long/short watch signals to Feishu.
+"""Push selected Binance stock perpetual long signals to Feishu.
 
 This script is intentionally read-only toward Binance: it fetches public
 contract market data, filters ``long_watch`` / ``short_watch`` candidates,
@@ -199,16 +199,15 @@ def signal_candidates(
     side: str,
     min_score: float,
 ) -> list[BinanceContractSnapshot]:
-    selected: list[BinanceContractSnapshot] = []
-    for item in snapshots:
-        if side in {"long", "both"} and item.contract_signal == "long_watch" and item.signal_score >= min_score:
-            selected.append(item)
-        if side in {"short", "both"} and item.contract_signal == "short_watch" and item.signal_score <= -min_score:
-            selected.append(item)
+    _ = side  # Compatibility only; short signals are intentionally disabled.
+    selected = [
+        item
+        for item in snapshots
+        if item.contract_signal == "long_watch" and item.signal_score >= min_score
+    ]
     return sorted(
         selected,
         key=lambda item: (
-            0 if item.contract_signal == "long_watch" else 1,
             -abs(item.signal_score),
             -item.quote_volume_24h,
         ),
@@ -346,12 +345,51 @@ def build_long_signal_card(
     )
 
 
+def _long_signal_phase(item: BinanceContractSnapshot) -> str:
+    """Classify a long signal with volatility-adaptive confirmation gates."""
+    if item.contract_signal != "long_watch":
+        return "none"
+    volatility = _clamp(item.kline_range_pct, 0.8, 20.0)
+    breakout_momentum = _clamp(volatility * 0.28, 0.8, 3.5)
+    pullback_momentum = _clamp(volatility * 0.10, 0.2, 1.2)
+    active_buy = _active_buy_ratio(item)
+    oi_change = item.open_interest_change_pct
+    funding = item.last_funding_rate or 0.0
+    deviation = abs(item.mark_index_deviation_pct or 0.0)
+    price = _plan_base_price(item)
+    near_high = item.high_price_24h > 0 and price >= item.high_price_24h * 0.985
+    controlled_pullback = (
+        item.high_price_24h > 0
+        and item.low_price_24h > 0
+        and item.high_price_24h > item.low_price_24h
+        and price < item.high_price_24h * 0.985
+        and price >= item.low_price_24h + (item.high_price_24h - item.low_price_24h) * 0.50
+    )
+    capital_ok = (
+        item.taker_buy_sell_buy_ratio is not None
+        and oi_change is not None
+        and active_buy >= 0.53
+        and oi_change >= 0
+    )
+    not_overheated = funding <= 0.001 and deviation <= 0.3
+    if not_overheated and capital_ok and (
+        (near_high and item.kline_return_pct >= breakout_momentum and active_buy >= 0.55)
+        or (controlled_pullback and item.kline_return_pct >= pullback_momentum)
+    ):
+        return "confirmed_long"
+    return "early_start_watch"
+
+
 def _signal_label(signal: str) -> str:
     if signal == "long_watch":
         return "做多观察"
     if signal == "short_watch":
         return "做空观察"
     return "未触发"
+
+
+def _phase_label(item: BinanceContractSnapshot) -> str:
+    return "确认多单" if _long_signal_phase(item) == "confirmed_long" else "早期启动观察"
 
 
 def _side_label(side: str) -> str:
@@ -378,27 +416,19 @@ def _risk_pct(item: BinanceContractSnapshot) -> float:
 
 def _trade_plan_values(item: BinanceContractSnapshot) -> dict[str, Any] | None:
     base = _plan_base_price(item)
-    if base <= 0 or item.contract_signal not in {"long_watch", "short_watch"}:
+    if base <= 0 or _long_signal_phase(item) != "confirmed_long":
         return None
 
     risk_pct = _risk_pct(item)
     entry_band = _clamp(risk_pct * 0.18, 0.15, 0.50)
     entry_low = base * (1 - entry_band / 100)
     entry_high = base * (1 + entry_band / 100)
-    if item.contract_signal == "long_watch":
-        stop = base * (1 - risk_pct / 100)
-        risk = base - stop
-        tp1 = base + risk
-        tp2 = base + risk * 2
-        invalidation = "1h 收盘跌破止损，或主动买入占比跌回 0.50 以下。"
-        direction = "long"
-    else:
-        stop = base * (1 + risk_pct / 100)
-        risk = stop - base
-        tp1 = max(0.0, base - risk)
-        tp2 = max(0.0, base - risk * 2)
-        invalidation = "1h 收盘突破止损，或主动买入占比回到 0.50 以上。"
-        direction = "short"
+    stop = base * (1 - risk_pct / 100)
+    risk = base - stop
+    tp1 = base + risk
+    tp2 = base + risk * 2
+    invalidation = "1h 收盘跌破止损、主动买入占比跌回 0.50 以下，或信号超过 24 小时未确认。"
+    direction = "long"
     return {
         "direction": direction,
         "base": base,
@@ -417,8 +447,8 @@ def _trade_plan_lines(item: BinanceContractSnapshot) -> tuple[str, str]:
     plan = _trade_plan_values(item)
     if not plan:
         return (
-            "计划：无触发，不提供参考入场、止损、止盈。",
-            "失效：等待下一轮扫描重新确认。",
+            "计划：早期启动观察，暂不提供买点、不模拟建仓。",
+            "确认：等待量化突破或回踩承接；超过 24 小时未确认则信号失效。",
         )
 
     return (
@@ -474,8 +504,8 @@ def _sim_order_values(item: BinanceContractSnapshot) -> dict[str, Any] | None:
 def _sim_order_line(item: BinanceContractSnapshot) -> str:
     if not _sim_order_enabled():
         return "模拟开单：已关闭。"
-    if item.contract_signal not in {"long_watch", "short_watch"}:
-        return "模拟开单：无触发，不模拟开仓。"
+    if _long_signal_phase(item) != "confirmed_long":
+        return "模拟开单：早期观察阶段不建仓。"
     values = _sim_order_values(item)
     if not values:
         return "模拟开单：风险距离无效，跳过。"
@@ -741,11 +771,7 @@ def signal_sections(
         [item for item in signals if item.contract_signal == "long_watch"],
         key=_rank_long_signal,
     )[:per_side_limit]
-    shorts = sorted(
-        [item for item in signals if item.contract_signal == "short_watch"],
-        key=_rank_short_signal,
-    )[:per_side_limit]
-    return longs, shorts
+    return longs, []
 
 
 def selected_signals(
@@ -789,7 +815,7 @@ def _append_signal_section(
         return
 
     for index, item in enumerate(items, start=1):
-        label = _signal_label(item.contract_signal)
+        label = _phase_label(item)
         plan_line, invalidation_line = _trade_plan_lines(item)
         sim_order_line = _sim_order_line(item)
         elements.append(
@@ -839,14 +865,14 @@ def build_contract_signal_card(
     long_count = len(long_signals)
     short_count = len(short_signals)
     header_title = (
-        f"Binance 股票合约多空信号 - 开多 {long_count} / 开空 {short_count}"
+        f"Binance 股票合约精选多单 - {long_count} 支"
         if signals
-        else "Binance 股票合约多空信号 - 当前无触发"
+        else "Binance 股票合约精选多单 - 当前无触发"
     )
     conclusion = (
-        f"当前精选 {len(long_signals) + len(short_signals)} 个合约信号：开多 {long_count} 个，开空 {short_count} 个；每边最多展示 {MAX_SIGNALS_PER_SIDE} 支。"
+        f"当前精选 {len(long_signals)} 个多头信号；早期观察不建仓，量化确认后才提供买点。"
         if signals
-        else "当前候选池没有满足做多或做空条件的合约，不建议为了推送而硬开仓。"
+        else "当前候选池没有满足精选多单条件的合约，不为了推送而硬开仓。"
     )
     elements: list[dict[str, Any]] = [
         {
@@ -855,7 +881,7 @@ def build_contract_signal_card(
                 "tag": "lark_md",
                 "content": (
                     f"**结论：** {conclusion}\n"
-                    f"**筛选：** 只扫描 Binance 股票代币合约；{_side_label(side)}；按1小时价格动量、OI变化、资金费率和主动买卖结构判断。\n"
+                    f"**筛选：** 只扫描 Binance 股票代币合约精选多单；按波动率自适应动量、OI变化、资金费率和主动买卖结构判断。\n"
                     f"**{_score_explanation()}**\n"
                     f"**周期：** {interval} × {limit} 根K线　**生成：** {now_text}\n"
                     f"**{_sim_stats_line(simulation)}**\n"
@@ -873,14 +899,6 @@ def build_contract_signal_card(
         items=long_signals,
         empty_text="本轮没有满足开多条件的股票合约；不为了凑数量硬开多。",
     )
-    _append_signal_section(
-        elements,
-        title=f"开空精选（最多 {MAX_SIGNALS_PER_SIDE} 支）",
-        logic=_direction_logic_text("short"),
-        items=short_signals,
-        empty_text="本轮没有满足开空条件的股票合约；不为了凑数量硬开空。",
-    )
-
     preview_rows = [] if signals else _candidate_preview(all_snapshots)
     if not signals and preview_rows:
         elements.append(
@@ -989,11 +1007,13 @@ def run(
         limit=limit,
         timeout=timeout,
     )
+    side = "long"
     raw_signals = signal_candidates(snapshots, side=side, min_score=min_score)
     signals = selected_signals(raw_signals)
     longs = [item for item in signals if item.contract_signal == "long_watch"]
     shorts = [item for item in signals if item.contract_signal == "short_watch"]
-    simulation = _update_sim_orders(snapshots=snapshots, signals=signals, dry_run=dry_run)
+    confirmed_signals = [item for item in signals if _long_signal_phase(item) == "confirmed_long"]
+    simulation = _update_sim_orders(snapshots=snapshots, signals=confirmed_signals, dry_run=dry_run)
     card = build_contract_signal_card(
         signals,
         all_snapshots=snapshots,
@@ -1006,6 +1026,8 @@ def run(
     result = {
         "long_count": len(longs),
         "short_count": len(shorts),
+        "early_watch_count": sum(_long_signal_phase(item) == "early_start_watch" for item in signals),
+        "confirmed_long_count": len(confirmed_signals),
         "signal_count": len(signals),
         "raw_signal_count": len(raw_signals),
         "snapshot_count": len(snapshots),
@@ -1030,7 +1052,7 @@ def run(
 def main() -> int:
     configure_console_encoding()
     load_dotenv(ROOT / ".env")
-    parser = argparse.ArgumentParser(description="Push Binance stock perpetual long/short watch signals to Feishu.")
+    parser = argparse.ArgumentParser(description="Push selected Binance stock perpetual long signals to Feishu.")
     parser.add_argument("--market", choices=("usdm",), default=os.getenv("BINANCE_CONTRACT_MARKET", "usdm"))
     parser.add_argument("--symbols", help="Comma separated futures symbols.")
     parser.add_argument("--interval", default=os.getenv("BINANCE_CONTRACT_INTERVAL", DEFAULT_INTERVAL))
@@ -1042,9 +1064,9 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=float(os.getenv("BINANCE_CONTRACT_TIMEOUT_SEC", "10")))
     parser.add_argument(
         "--side",
-        choices=("long", "short", "both"),
-        default=os.getenv("BINANCE_CONTRACT_SIGNAL_SIDE", "both"),
-        help="Signal side to push. Default: both.",
+        choices=("long",),
+        default="long",
+        help="Only long signals are supported.",
     )
     parser.add_argument(
         "--min-score",

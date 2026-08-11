@@ -43,7 +43,7 @@ from scripts.push_strategy_digest import configure_console_encoding
 def _latest_prices(market: str, codes: list[str]) -> tuple[dict[str, dict[str, Any]], list[str]]:
     if not codes:
         return {}, []
-    selection_profile = "us_contract" if market == "us" else "standard"
+    selection_profile = "us_quality" if market == "us" else "standard"
     picks, errors = select_daily_picks(
         codes,
         market=market,

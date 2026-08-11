@@ -18,8 +18,8 @@
 python scripts/fetch_binance_contract_data.py
 python scripts/fetch_binance_contract_data.py --symbols MU,SAND --interval 5m --limit 288
 python scripts/fetch_binance_contract_data.py --symbols MUUSDT,SNDKUSDT --format json
-python scripts/push_binance_long_signals.py --side both --symbols MU,SAND
-python scripts/push_binance_long_signals.py --side both --dry-run
+python scripts/push_binance_long_signals.py --side long --symbols MU,SAND
+python scripts/push_binance_long_signals.py --side long --dry-run
 ```
 
 默认市场是 USDT-M TradFi/equity perpetual，默认候选池：
@@ -46,11 +46,7 @@ BINANCE_FUTURES_BASE_URL=https://fapi.binance.com
 
 ## 多空推送规则
 
-`scripts/push_binance_long_signals.py` 默认 `--side both`：股票合约出现 `long_watch` 或 `short_watch` 任一方向信号才推送飞书；没有多空信号时默认不发送空状态卡。
-
-- 只看做多：`python scripts/push_binance_long_signals.py --side long`
-- 只看做空：`python scripts/push_binance_long_signals.py --side short`
-- 多空都看：`python scripts/push_binance_long_signals.py --side both`
+`scripts/push_binance_long_signals.py` 只支持 `--side long`：仅推送精选多单，做空策略、做空卡片和做空模拟建仓均已关闭；没有多头信号时默认不发送空状态卡。旧调用即使传入 `side=both/short`，运行层也只会保留多单。
 - 临时发送空状态卡：追加 `--push-empty`
 
 飞书卡片会把信号分成“开多精选”和“开空精选”两块，每个方向最多展示 3 支合约。若同一方向触发超过 3 支，会优先展示信号强度更明确、24h 成交额更高的合约；模拟开单也只跟随卡片里的精选合约，避免后台记录了用户看不到的信号。
@@ -64,7 +60,7 @@ BINANCE_FUTURES_BASE_URL=https://fapi.binance.com
 - ≤ -8：强空，做空条件高度集中。
 - 信号强度只用于排序优先级，不等于胜率，也不是自动下单命令。
 
-做多逻辑主要看 1 小时价格动量转强、官方 taker buy/sell 与 K 线主动买入占比偏多、OI 没有明显萎缩或正在放大、资金费率不过热、标记价与指数价没有异常偏离；做空逻辑主要看 1 小时价格动量转弱、主动卖出占优、OI 没有明显萎缩或正在放大、资金费率风险可控、标记价与指数价没有异常偏离。OI 放大配合方向动量，优先理解为新增仓位推动；价格动但 OI 明显萎缩，会被视为信号质量下降；标记价 / 指数价偏离超过 0.8% 会阻断触发，0.3% 到 0.8% 会降级信号。
+做多逻辑主要看 1 小时价格动量转强、官方 taker buy/sell 与 K 线主动买入占比偏多、OI 没有明显萎缩或正在放大、资金费率不过热、标记价与指数价没有异常偏离。策略不再使用固定涨幅区间，而是按每个合约近期 K 线振幅计算自适应突破与回踩阈值：资金结构尚未完成确认时标为“早期启动观察”，只推送观察、不模拟建仓；价格突破或回踩承接与 OI、主动买入共同确认后才升级为“确认多单”并给出入场、止损和止盈。标记价 / 指数价偏离超过 0.8% 会阻断基础触发，确认阶段要求偏离不超过 0.3%；资金费率过热也不会升级为确认多单。
 
 卡片展示的胜率来自本地模拟开单账本：有已平仓样本时显示胜负笔数、模拟胜率、累计盈亏和当前持仓；样本不足时会明确提示“暂无已平仓样本”。该胜率只是当前规则的模拟记录，不代表未来收益保证。
 

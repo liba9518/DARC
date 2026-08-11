@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
+import requests
 import yfinance as yf
 import yfinance.cache as yf_cache
 
@@ -33,6 +34,39 @@ def configure_yfinance_cache() -> None:
 
 
 configure_yfinance_cache()
+
+
+def fetch_yahoo_chart_history(symbol: str, *, period: str = "6mo") -> pd.DataFrame:
+    """Fetch daily bars without yfinance's cookie/crumb session.
+
+    Yahoo's chart endpoint is used only as a fallback when yfinance is rate
+    limited. It is the same upstream dataset and keeps the selector read-only.
+    """
+    response = requests.get(
+        f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}",
+        params={"range": period, "interval": "1d", "events": "history"},
+        headers={"User-Agent": "Mozilla/5.0"},
+        timeout=20,
+    )
+    response.raise_for_status()
+    result = (response.json().get("chart", {}).get("result") or [None])[0]
+    if not result:
+        return pd.DataFrame()
+    timestamps = result.get("timestamp") or []
+    quote = ((result.get("indicators") or {}).get("quote") or [{}])[0]
+    if not timestamps or not quote:
+        return pd.DataFrame()
+    frame = pd.DataFrame(
+        {
+            "Open": quote.get("open") or [],
+            "High": quote.get("high") or [],
+            "Low": quote.get("low") or [],
+            "Close": quote.get("close") or [],
+            "Volume": quote.get("volume") or [],
+        },
+        index=pd.to_datetime(timestamps, unit="s", utc=True),
+    )
+    return frame.dropna(subset=["Close"])
 
 
 @dataclass(frozen=True)
@@ -268,6 +302,25 @@ def rank_history(
             and capital_trace_score >= (52 if regime == "逆风" else 45)
             and confidence_points >= (7 if regime == "逆风" else 5)
         )
+    elif selection_profile == "us_quality":
+        # Precision-first: require trend, relative strength, participation,
+        # and risk controls to confirm one another. No marginal fallback.
+        eligible = (
+            price >= ma20 >= ma60
+            and ma20 > ma20_5d_ago
+            and return_5d > -2
+            and return_20d > 0
+            and relative_strength_20d > 0
+            and 45 <= rsi14 <= 76
+            and annualized_volatility <= 55
+            and max_drawdown_20d >= -12
+            and liquidity >= minimum_liquidity
+            and capital_trace_score >= (65 if regime == "逆风" else 58)
+            and confidence_points >= (9 if regime == "逆风" else 8)
+            and return_1d <= 6
+            and return_20d <= 30
+            and score >= (68 if regime == "逆风" else 62)
+        )
     else:
         eligible = (
             price >= ma20
@@ -359,7 +412,12 @@ def _download_one(
     selection_profile: str,
 ) -> StockPick | None:
     symbol = to_yahoo_symbol(code, market)
-    history = yf.Ticker(symbol).history(period="6mo", interval="1d", auto_adjust=True)
+    try:
+        history = yf.Ticker(symbol).history(period="6mo", interval="1d", auto_adjust=True)
+    except Exception:
+        history = fetch_yahoo_chart_history(symbol)
+    if history is None or history.empty:
+        history = fetch_yahoo_chart_history(symbol)
     history = trim_incomplete_session(history, market)
     return rank_history(
         code,
@@ -401,7 +459,12 @@ def select_daily_picks(
         else "000300.SS"
     )
     try:
-        benchmark_history = yf.Ticker(benchmark_code).history(period="6mo", interval="1d", auto_adjust=True)
+        try:
+            benchmark_history = yf.Ticker(benchmark_code).history(period="6mo", interval="1d", auto_adjust=True)
+        except Exception:
+            benchmark_history = fetch_yahoo_chart_history(benchmark_code)
+        if benchmark_history is None or benchmark_history.empty:
+            benchmark_history = fetch_yahoo_chart_history(benchmark_code)
         benchmark_history = trim_incomplete_session(benchmark_history, market)
         regime, regime_adjustment = market_regime(benchmark_history)
     except Exception as exc:
