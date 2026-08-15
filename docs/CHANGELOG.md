@@ -9,7 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-- [改进] Binance 股票合约策略取消做空，仅推送精选多单，并以近期波动率、动量、OI、主动买入、资金费率和价格偏离量化区分“早期启动观察”与“确认多单”；观察阶段不模拟建仓。
+- [修复] Binance 股票合约定时推送固定使用 Linux VPS runner，避免 Windows runner 随机接单后被 Binance HTTP 451 拒绝而漏推。
+- [改进] Binance 股票合约策略恢复精选多空双向编排，分别采用突破/回踩承接与跌破/反弹承压确认；早期观察不建仓，并过滤资金费率过热、OI萎缩及低流动性信号。
+- [改进] Binance 股票合约模拟跟单计入双边手续费与进出场滑点，并新增 Profit Factor、单笔期望及多空独立胜率统计。
 - [修复] 美股日线采集在 yfinance 会话限流时回退 Yahoo chart 端点，避免模拟跟单因同源会话异常整批无数据。
 - [改进] 美股推荐切换为质量优先筛选，要求趋势、相对强度、资金承接与风险指标共同确认，并保持不固定数量、无优质标的不推送。
 

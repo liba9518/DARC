@@ -1,4 +1,4 @@
-"""Push selected Binance stock perpetual long signals to Feishu.
+"""Push selected Binance stock perpetual long/short signals to Feishu.
 
 This script is intentionally read-only toward Binance: it fetches public
 contract market data, filters ``long_watch`` / ``short_watch`` candidates,
@@ -42,6 +42,7 @@ FEISHU_WEBHOOK_ATTEMPTS = 3
 FEISHU_WEBHOOK_RETRY_DELAYS = (2.0, 5.0)
 FEISHU_WEBHOOK_RETRY_STATUS_CODES = {429, 500, 502, 503, 504}
 MAX_SIGNALS_PER_SIDE = 3
+DEFAULT_MIN_QUOTE_VOLUME_24H = 5_000_000.0
 
 
 def _sign(secret: str) -> dict[str, str]:
@@ -199,12 +200,27 @@ def signal_candidates(
     side: str,
     min_score: float,
 ) -> list[BinanceContractSnapshot]:
-    _ = side  # Compatibility only; short signals are intentionally disabled.
-    selected = [
-        item
-        for item in snapshots
-        if item.contract_signal == "long_watch" and item.signal_score >= min_score
-    ]
+    min_quote_volume = _env_float(
+        "BINANCE_SIGNAL_MIN_QUOTE_VOLUME_24H",
+        DEFAULT_MIN_QUOTE_VOLUME_24H,
+        minimum=0.0,
+        maximum=10_000_000_000.0,
+    )
+    selected = []
+    if side in {"long", "both"}:
+        selected.extend(
+            item for item in snapshots
+            if item.contract_signal == "long_watch"
+            and item.signal_score >= min_score
+            and item.quote_volume_24h >= min_quote_volume
+        )
+    if side in {"short", "both"}:
+        selected.extend(
+            item for item in snapshots
+            if item.contract_signal == "short_watch"
+            and item.signal_score <= -min_score
+            and item.quote_volume_24h >= min_quote_volume
+        )
     return sorted(
         selected,
         key=lambda item: (
@@ -380,6 +396,47 @@ def _long_signal_phase(item: BinanceContractSnapshot) -> str:
     return "early_start_watch"
 
 
+def _short_signal_phase(item: BinanceContractSnapshot) -> str:
+    """Require breakdown or failed rebound confirmation before simulating a short."""
+    if item.contract_signal != "short_watch":
+        return "none"
+    volatility = _clamp(item.kline_range_pct, 0.8, 20.0)
+    breakdown_momentum = _clamp(volatility * 0.28, 0.8, 3.5)
+    rebound_momentum = _clamp(volatility * 0.10, 0.2, 1.2)
+    active_buy = _active_buy_ratio(item)
+    oi_change = item.open_interest_change_pct
+    funding = item.last_funding_rate or 0.0
+    deviation = abs(item.mark_index_deviation_pct or 0.0)
+    price = _plan_base_price(item)
+    near_low = item.low_price_24h > 0 and price <= item.low_price_24h * 1.015
+    failed_rebound = (
+        item.high_price_24h > item.low_price_24h > 0
+        and price > item.low_price_24h * 1.015
+        and price <= item.low_price_24h + (item.high_price_24h - item.low_price_24h) * 0.50
+    )
+    capital_ok = (
+        item.taker_buy_sell_buy_ratio is not None
+        and oi_change is not None
+        and active_buy <= 0.47
+        and oi_change >= 0
+    )
+    not_overheated = funding >= -0.001 and deviation <= 0.3
+    if not_overheated and capital_ok and (
+        (near_low and item.kline_return_pct <= -breakdown_momentum and active_buy <= 0.45)
+        or (failed_rebound and item.kline_return_pct <= -rebound_momentum)
+    ):
+        return "confirmed_short"
+    return "early_start_watch"
+
+
+def _signal_phase(item: BinanceContractSnapshot) -> str:
+    if item.contract_signal == "long_watch":
+        return _long_signal_phase(item)
+    if item.contract_signal == "short_watch":
+        return _short_signal_phase(item)
+    return "none"
+
+
 def _signal_label(signal: str) -> str:
     if signal == "long_watch":
         return "做多观察"
@@ -389,7 +446,12 @@ def _signal_label(signal: str) -> str:
 
 
 def _phase_label(item: BinanceContractSnapshot) -> str:
-    return "确认多单" if _long_signal_phase(item) == "confirmed_long" else "早期启动观察"
+    phase = _signal_phase(item)
+    if phase == "confirmed_long":
+        return "确认多单"
+    if phase == "confirmed_short":
+        return "确认空单"
+    return "早期启动观察"
 
 
 def _side_label(side: str) -> str:
@@ -416,19 +478,25 @@ def _risk_pct(item: BinanceContractSnapshot) -> float:
 
 def _trade_plan_values(item: BinanceContractSnapshot) -> dict[str, Any] | None:
     base = _plan_base_price(item)
-    if base <= 0 or _long_signal_phase(item) != "confirmed_long":
+    phase = _signal_phase(item)
+    if base <= 0 or phase not in {"confirmed_long", "confirmed_short"}:
         return None
 
     risk_pct = _risk_pct(item)
     entry_band = _clamp(risk_pct * 0.18, 0.15, 0.50)
     entry_low = base * (1 - entry_band / 100)
     entry_high = base * (1 + entry_band / 100)
-    stop = base * (1 - risk_pct / 100)
-    risk = base - stop
-    tp1 = base + risk
-    tp2 = base + risk * 2
-    invalidation = "1h 收盘跌破止损、主动买入占比跌回 0.50 以下，或信号超过 24 小时未确认。"
-    direction = "long"
+    direction = "long" if phase == "confirmed_long" else "short"
+    if direction == "long":
+        stop = base * (1 - risk_pct / 100)
+        risk = base - stop
+        tp1, tp2 = base + risk, base + risk * 2
+        invalidation = "1h 收盘跌破止损、主动买入占比跌回 0.50 以下，或信号超过 24 小时未确认。"
+    else:
+        stop = base * (1 + risk_pct / 100)
+        risk = stop - base
+        tp1, tp2 = base - risk, base - risk * 2
+        invalidation = "1h 收盘突破止损、主动买入占比升回 0.50 以上，或信号超过 24 小时未确认。"
     return {
         "direction": direction,
         "base": base,
@@ -447,17 +515,17 @@ def _trade_plan_lines(item: BinanceContractSnapshot) -> tuple[str, str]:
     plan = _trade_plan_values(item)
     if not plan:
         return (
-            "计划：早期启动观察，暂不提供买点、不模拟建仓。",
-            "确认：等待量化突破或回踩承接；超过 24 小时未确认则信号失效。",
+            "买卖点：等待确认，当前不提供入场点。",
+            "止盈止损：未确认前不设置；超过 24 小时未确认则信号失效。",
         )
 
+    entry_label = "买入点" if plan["direction"] == "long" else "卖出点"
     return (
-        "计划："
-        f"参考入场 {_format_price(plan['entry_low'])}-{_format_price(plan['entry_high'])}；"
-        f"止损 {_format_price(plan['stop'])}；"
-        f"止盈1 {_format_price(plan['tp1'])}；"
-        f"止盈2 {_format_price(plan['tp2'])}；"
-        "单笔风险≤账户 0.5%-1%。",
+        f"{entry_label}：**{_format_price(plan['entry_low'])}-{_format_price(plan['entry_high'])}**\n"
+        f"止损：**{_format_price(plan['stop'])}**　"
+        f"止盈1：**{_format_price(plan['tp1'])}**　"
+        f"止盈2：**{_format_price(plan['tp2'])}**\n"
+        "仓位：单笔风险≤账户 0.5%-1%。",
         f"失效：{plan['invalidation']}",
     )
 
@@ -480,6 +548,8 @@ def _sim_order_values(item: BinanceContractSnapshot) -> dict[str, Any] | None:
     order_risk_pct = _env_float("BINANCE_SIM_ORDER_RISK_PCT", 1.0, minimum=0.1, maximum=5.0)
     leverage = _env_float("BINANCE_SIM_LEVERAGE", 3.0, minimum=1.0, maximum=20.0)
     max_margin_pct = _env_float("BINANCE_SIM_MAX_MARGIN_PCT", 30.0, minimum=1.0, maximum=100.0)
+    fee_rate = _env_float("BINANCE_SIM_TAKER_FEE_PCT", 0.05, minimum=0.0, maximum=1.0) / 100
+    slippage_rate = _env_float("BINANCE_SIM_SLIPPAGE_PCT", 0.05, minimum=0.0, maximum=2.0) / 100
 
     risk_budget = equity * order_risk_pct / 100
     qty_by_risk = risk_budget / risk_per_contract
@@ -488,14 +558,17 @@ def _sim_order_values(item: BinanceContractSnapshot) -> dict[str, Any] | None:
     quantity = max(0.0, min(qty_by_risk, qty_by_margin))
     notional = quantity * base
     margin = notional / leverage if leverage > 0 else notional
+    entry = base * (1 + slippage_rate if plan["direction"] == "long" else 1 - slippage_rate)
     return {
         **plan,
-        "entry": base,
+        "entry": entry,
         "quantity": quantity,
         "notional": notional,
         "margin": margin,
         "risk_budget": risk_budget,
         "leverage": leverage,
+        "fee_rate": fee_rate,
+        "slippage_rate": slippage_rate,
         "direction_label": "做多" if plan["direction"] == "long" else "做空",
         "capped": qty_by_margin < qty_by_risk,
     }
@@ -504,7 +577,7 @@ def _sim_order_values(item: BinanceContractSnapshot) -> dict[str, Any] | None:
 def _sim_order_line(item: BinanceContractSnapshot) -> str:
     if not _sim_order_enabled():
         return "模拟开单：已关闭。"
-    if _long_signal_phase(item) != "confirmed_long":
+    if _signal_phase(item) not in {"confirmed_long", "confirmed_short"}:
         return "模拟开单：早期观察阶段不建仓。"
     values = _sim_order_values(item)
     if not values:
@@ -545,15 +618,24 @@ def _close_sim_order(order: dict[str, Any], *, price: float, reason: str, result
     entry = float(order.get("entry") or 0)
     quantity = float(order.get("quantity") or 0)
     direction = str(order.get("direction") or "")
-    pnl = (entry - price) * quantity if direction == "short" else (price - entry) * quantity
+    slippage_rate = float(order.get("slippage_rate") or 0)
+    exit_price = price * (1 + slippage_rate if direction == "short" else 1 - slippage_rate)
+    gross_pnl = (entry - exit_price) * quantity if direction == "short" else (exit_price - entry) * quantity
+    fee_rate = float(order.get("fee_rate") or 0)
+    fees = (entry + exit_price) * quantity * fee_rate
+    funding_cost = float(order.get("funding_cost") or 0)
+    pnl = gross_pnl - fees - funding_cost
     order.update(
         {
             "status": "closed",
             "closed_at": at,
-            "close_price": round(price, 6),
+            "close_price": round(exit_price, 6),
             "close_reason": reason,
             "result": result,
             "pnl": round(pnl, 4),
+            "gross_pnl": round(gross_pnl, 4),
+            "fees": round(fees, 4),
+            "funding_cost": round(funding_cost, 4),
             "pnl_pct": round((pnl / float(order.get("notional") or 1)) * 100, 4),
         }
     )
@@ -594,6 +676,10 @@ def _sim_stats(state: dict[str, Any]) -> dict[str, Any]:
     losses = [order for order in closed if order.get("result") == "loss"]
     open_orders = [order for order in orders if order.get("status") == "open"]
     total_pnl = sum(float(order.get("pnl") or 0) for order in closed)
+    gross_profit = sum(max(0.0, float(order.get("pnl") or 0)) for order in closed)
+    gross_loss = abs(sum(min(0.0, float(order.get("pnl") or 0)) for order in closed))
+    long_closed = [order for order in closed if order.get("direction") == "long"]
+    short_closed = [order for order in closed if order.get("direction") == "short"]
     closed_count = len(closed)
     return {
         "total_orders": len(orders),
@@ -603,6 +689,12 @@ def _sim_stats(state: dict[str, Any]) -> dict[str, Any]:
         "losses": len(losses),
         "win_rate": round(len(wins) / closed_count * 100, 2) if closed_count else 0.0,
         "total_pnl": round(total_pnl, 4),
+        "profit_factor": round(gross_profit / gross_loss, 3) if gross_loss else (999.0 if gross_profit else 0.0),
+        "expectancy": round(total_pnl / closed_count, 4) if closed_count else 0.0,
+        "long_closed": len(long_closed),
+        "long_win_rate": round(sum(o.get("result") == "win" for o in long_closed) / len(long_closed) * 100, 2) if long_closed else 0.0,
+        "short_closed": len(short_closed),
+        "short_win_rate": round(sum(o.get("result") == "win" for o in short_closed) / len(short_closed) * 100, 2) if short_closed else 0.0,
     }
 
 
@@ -628,6 +720,9 @@ def _sim_order_record(item: BinanceContractSnapshot, *, at: str) -> dict[str, An
         "margin": round(float(values["margin"]), 4),
         "risk_budget": round(float(values["risk_budget"]), 4),
         "leverage": float(values["leverage"]),
+        "fee_rate": float(values["fee_rate"]),
+        "slippage_rate": float(values["slippage_rate"]),
+        "funding_cost": 0.0,
         "signal_score": item.signal_score,
     }
 
@@ -688,6 +783,9 @@ def _sim_stats_line(simulation: dict[str, Any] | None) -> str:
         f"模拟胜率：已平 {closed_count} 笔；胜 {int(stats.get('wins') or 0)} / "
         f"负 {int(stats.get('losses') or 0)}；胜率 {float(stats.get('win_rate') or 0):.2f}%；"
         f"累计盈亏 {_format_price(float(stats.get('total_pnl') or 0))} USDT；"
+        f"PF {float(stats.get('profit_factor') or 0):.2f}；期望/笔 {_format_price(float(stats.get('expectancy') or 0))} USDT；"
+        f"多单 {int(stats.get('long_closed') or 0)} 笔/{float(stats.get('long_win_rate') or 0):.1f}%；"
+        f"空单 {int(stats.get('short_closed') or 0)} 笔/{float(stats.get('short_win_rate') or 0):.1f}%；"
         f"当前持仓 {int(stats.get('open_count') or 0)} 笔。"
     )
 
@@ -771,7 +869,11 @@ def signal_sections(
         [item for item in signals if item.contract_signal == "long_watch"],
         key=_rank_long_signal,
     )[:per_side_limit]
-    return longs, []
+    shorts = sorted(
+        [item for item in signals if item.contract_signal == "short_watch"],
+        key=_rank_short_signal,
+    )[:per_side_limit]
+    return longs, shorts
 
 
 def selected_signals(
@@ -865,14 +967,14 @@ def build_contract_signal_card(
     long_count = len(long_signals)
     short_count = len(short_signals)
     header_title = (
-        f"Binance 股票合约精选多单 - {long_count} 支"
+        f"Binance 股票合约精选信号 - 多 {long_count} / 空 {short_count}"
         if signals
-        else "Binance 股票合约精选多单 - 当前无触发"
+        else "Binance 股票合约精选信号 - 当前无触发"
     )
     conclusion = (
-        f"当前精选 {len(long_signals)} 个多头信号；早期观察不建仓，量化确认后才提供买点。"
+        f"当前精选多 {long_count} / 空 {short_count}；早期观察不建仓，量化确认后才提供点位。"
         if signals
-        else "当前候选池没有满足精选多单条件的合约，不为了推送而硬开仓。"
+        else "当前候选池没有满足精选多空条件的合约，不为了推送而硬开仓。"
     )
     elements: list[dict[str, Any]] = [
         {
@@ -881,7 +983,7 @@ def build_contract_signal_card(
                 "tag": "lark_md",
                 "content": (
                     f"**结论：** {conclusion}\n"
-                    f"**筛选：** 只扫描 Binance 股票代币合约精选多单；按波动率自适应动量、OI变化、资金费率和主动买卖结构判断。\n"
+                    f"**筛选：** 只扫描 Binance 股票代币合约；按波动率自适应动量、OI变化、资金费率和主动买卖结构判断。\n"
                     f"**{_score_explanation()}**\n"
                     f"**周期：** {interval} × {limit} 根K线　**生成：** {now_text}\n"
                     f"**{_sim_stats_line(simulation)}**\n"
@@ -898,6 +1000,13 @@ def build_contract_signal_card(
         logic=_direction_logic_text("long"),
         items=long_signals,
         empty_text="本轮没有满足开多条件的股票合约；不为了凑数量硬开多。",
+    )
+    _append_signal_section(
+        elements,
+        title=f"开空精选（最多 {MAX_SIGNALS_PER_SIDE} 支）",
+        logic=_direction_logic_text("short"),
+        items=short_signals,
+        empty_text="本轮没有满足开空条件的股票合约；不为了凑数量硬开空。",
     )
     preview_rows = [] if signals else _candidate_preview(all_snapshots)
     if not signals and preview_rows:
@@ -1007,12 +1116,14 @@ def run(
         limit=limit,
         timeout=timeout,
     )
-    side = "long"
     raw_signals = signal_candidates(snapshots, side=side, min_score=min_score)
     signals = selected_signals(raw_signals)
     longs = [item for item in signals if item.contract_signal == "long_watch"]
     shorts = [item for item in signals if item.contract_signal == "short_watch"]
-    confirmed_signals = [item for item in signals if _long_signal_phase(item) == "confirmed_long"]
+    confirmed_signals = [
+        item for item in signals
+        if _signal_phase(item) in {"confirmed_long", "confirmed_short"}
+    ]
     simulation = _update_sim_orders(snapshots=snapshots, signals=confirmed_signals, dry_run=dry_run)
     card = build_contract_signal_card(
         signals,
@@ -1026,8 +1137,9 @@ def run(
     result = {
         "long_count": len(longs),
         "short_count": len(shorts),
-        "early_watch_count": sum(_long_signal_phase(item) == "early_start_watch" for item in signals),
-        "confirmed_long_count": len(confirmed_signals),
+        "early_watch_count": sum(_signal_phase(item) == "early_start_watch" for item in signals),
+        "confirmed_long_count": sum(_signal_phase(item) == "confirmed_long" for item in signals),
+        "confirmed_short_count": sum(_signal_phase(item) == "confirmed_short" for item in signals),
         "signal_count": len(signals),
         "raw_signal_count": len(raw_signals),
         "snapshot_count": len(snapshots),
@@ -1052,7 +1164,7 @@ def run(
 def main() -> int:
     configure_console_encoding()
     load_dotenv(ROOT / ".env")
-    parser = argparse.ArgumentParser(description="Push selected Binance stock perpetual long signals to Feishu.")
+    parser = argparse.ArgumentParser(description="Push selected Binance stock perpetual long/short signals to Feishu.")
     parser.add_argument("--market", choices=("usdm",), default=os.getenv("BINANCE_CONTRACT_MARKET", "usdm"))
     parser.add_argument("--symbols", help="Comma separated futures symbols.")
     parser.add_argument("--interval", default=os.getenv("BINANCE_CONTRACT_INTERVAL", DEFAULT_INTERVAL))
@@ -1064,9 +1176,9 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=float(os.getenv("BINANCE_CONTRACT_TIMEOUT_SEC", "10")))
     parser.add_argument(
         "--side",
-        choices=("long",),
-        default="long",
-        help="Only long signals are supported.",
+        choices=("long", "short", "both"),
+        default=os.getenv("BINANCE_CONTRACT_SIGNAL_SIDE", "both"),
+        help="Select long, short, or both directions.",
     )
     parser.add_argument(
         "--min-score",

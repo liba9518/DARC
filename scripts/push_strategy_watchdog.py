@@ -65,7 +65,7 @@ def _env_float(name: str, default: float, *, minimum: float) -> float:
 def _run_binance_contract_signals() -> dict[str, Any]:
     market = os.getenv("BINANCE_CONTRACT_MARKET", "usdm")
     symbols = os.getenv("BINANCE_CONTRACT_SYMBOLS") or None
-    side = "long"
+    side = os.getenv("BINANCE_CONTRACT_SIGNAL_SIDE", "both")
     min_score = float(os.getenv("BINANCE_SIGNAL_MIN_SCORE", os.getenv("BINANCE_LONG_SIGNAL_MIN_SCORE", "2")))
     return push_contract_signals(
         market=market,
@@ -83,7 +83,7 @@ def _run_binance_contract_signals() -> dict[str, Any]:
 TASKS: tuple[WatchdogTask, ...] = (
     WatchdogTask(
         key="binance-contract",
-        label="Binance stock contract selected long signals",
+        label="Binance stock contract selected long/short signals",
         runner=_run_binance_contract_signals,
     ),
 )

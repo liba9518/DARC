@@ -3,7 +3,7 @@ name: Feishu Binance stock contract signals
 on:
   schedule:
     # Binance TradFi/equity perpetual contracts trade 24/7. The script pushes
-    # only when selected long conditions are triggered, so idle scans do not send
+    # only when selected long/short conditions are triggered, so idle scans do not send
     # Feishu cards.
     - cron: "*/15 * * * *"
   workflow_dispatch:
@@ -33,9 +33,9 @@ concurrency:
 jobs:
   push:
     # Binance Futures returns HTTP 451 from many GitHub-hosted runner regions.
-    # Register a self-hosted x64 runner on a Windows PC or Linux VPS that can
-    # access fapi.binance.com, and add the custom label `binance-futures`.
-    runs-on: [self-hosted, x64, binance-futures]
+    # Pin this job to the Linux VPS: the Windows runner is intermittently
+    # rejected by Binance Futures with HTTP 451.
+    runs-on: [self-hosted, Linux, x64, binance-futures]
     timeout-minutes: 20
     env:
       TZ: Asia/Shanghai
@@ -49,8 +49,9 @@ jobs:
       BINANCE_CONTRACT_INTERVAL: ${{ vars.BINANCE_CONTRACT_INTERVAL || '1h' }}
       BINANCE_CONTRACT_KLINE_LIMIT: ${{ vars.BINANCE_CONTRACT_KLINE_LIMIT || '24' }}
       BINANCE_CONTRACT_TIMEOUT_SEC: ${{ vars.BINANCE_CONTRACT_TIMEOUT_SEC || '10' }}
-      BINANCE_CONTRACT_SIGNAL_SIDE: "long"
+      BINANCE_CONTRACT_SIGNAL_SIDE: ${{ vars.BINANCE_CONTRACT_SIGNAL_SIDE || 'both' }}
       BINANCE_SIGNAL_MIN_SCORE: ${{ vars.BINANCE_SIGNAL_MIN_SCORE || '2' }}
+      BINANCE_SIGNAL_MIN_QUOTE_VOLUME_24H: ${{ vars.BINANCE_SIGNAL_MIN_QUOTE_VOLUME_24H || '5000000' }}
       BINANCE_PUSH_EMPTY_LONG_STATUS: "false"
       BINANCE_FUTURES_BASE_URL: ${{ vars.BINANCE_FUTURES_BASE_URL || 'https://fapi.binance.com' }}
       BINANCE_SIM_ORDER_ENABLED: ${{ vars.BINANCE_SIM_ORDER_ENABLED || 'true' }}
@@ -58,6 +59,8 @@ jobs:
       BINANCE_SIM_ORDER_RISK_PCT: ${{ vars.BINANCE_SIM_ORDER_RISK_PCT || '1' }}
       BINANCE_SIM_LEVERAGE: ${{ vars.BINANCE_SIM_LEVERAGE || '3' }}
       BINANCE_SIM_MAX_MARGIN_PCT: ${{ vars.BINANCE_SIM_MAX_MARGIN_PCT || '30' }}
+      BINANCE_SIM_TAKER_FEE_PCT: ${{ vars.BINANCE_SIM_TAKER_FEE_PCT || '0.05' }}
+      BINANCE_SIM_SLIPPAGE_PCT: ${{ vars.BINANCE_SIM_SLIPPAGE_PCT || '0.05' }}
 
     steps:
       - name: Check out repository
@@ -93,45 +96,7 @@ jobs:
         run: |
           python -c "import os, requests; base_url=os.environ.get('BINANCE_FUTURES_BASE_URL','https://fapi.binance.com').rstrip('/'); response=requests.get(base_url + '/fapi/v1/time', timeout=10); response.raise_for_status(); print('Binance Futures API access OK: ' + str(response.json().get('serverTime')))"
 
-      - name: Push Binance stock contract signals on Windows
-        if: runner.os == 'Windows'
-        shell: powershell
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          $market = $env:BINANCE_CONTRACT_MARKET
-          $side = $env:BINANCE_CONTRACT_SIGNAL_SIDE
-          $symbols = $env:BINANCE_CONTRACT_SYMBOLS
-          $pushEmpty = "false"
-
-          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
-            $market = "${{ inputs.market }}"
-            $symbols = "${{ inputs.symbols }}"
-            $pushEmpty = "${{ inputs.push_empty }}"
-          }
-
-          $scriptArgs = @(
-            "scripts/push_binance_long_signals.py",
-            "--market", $market,
-            "--side", $side,
-            "--interval", $env:BINANCE_CONTRACT_INTERVAL,
-            "--limit", $env:BINANCE_CONTRACT_KLINE_LIMIT,
-            "--timeout", $env:BINANCE_CONTRACT_TIMEOUT_SEC,
-            "--min-score", $env:BINANCE_SIGNAL_MIN_SCORE,
-            "--no-push-empty"
-          )
-
-          if (-not [string]::IsNullOrWhiteSpace($symbols)) {
-            $scriptArgs += @("--symbols", $symbols)
-          }
-          if ($pushEmpty -eq "true") {
-            $scriptArgs += "--push-empty"
-          }
-
-          python @scriptArgs
-
-      - name: Push Binance stock contract signals on Linux
-        if: runner.os == 'Linux'
+      - name: Push Binance stock contract signals
         shell: bash
         run: |
           set -euo pipefail

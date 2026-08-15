@@ -30,6 +30,7 @@ def test_watchdog_does_not_run_legacy_stock_tasks():
 
 def test_run_watchdog_calls_contract_signal_runner(monkeypatch):
     calls = []
+    monkeypatch.setenv("BINANCE_CONTRACT_SIGNAL_SIDE", "both")
 
     def fake_runner(**kwargs):
         calls.append(kwargs)
